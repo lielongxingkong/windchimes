@@ -249,6 +249,32 @@ class TestUtils(unittest.TestCase):
         except ValueError as err:
             self.assertEquals(str(err), 'Invalid path: o%0An%20e')
 
+    def test_split_fingerprint_path(self):
+        # Test swift.common.utils.split_fingerprint_path
+        self.assertRaises(ValueError, utils.split_fingerprint_path, '', 1)
+        self.assertRaises(ValueError, utils.split_fingerprint_path, '/', 1)
+        self.assertRaises(ValueError, utils.split_fingerprint_path, '//', 1)
+        self.assertRaises(ValueError, utils.split_fingerprint_path, '', 2)
+        self.assertRaises(ValueError, utils.split_fingerprint_path, '/', 2)
+        self.assertRaises(ValueError, utils.split_fingerprint_path, '//', 2)
+        self.assertRaises(ValueError, utils.split_fingerprint_path, '/a', 2)
+        self.assertEquals(utils.split_fingerprint_path('/a', 1), ['a'])
+        self.assertEquals(utils.split_fingerprint_path('/a/c', 2), ['a', 'c'])
+        self.assertEquals(utils.split_fingerprint_path('/a/c/', 2), ['a', 'c'])
+        self.assertEquals(utils.split_fingerprint_path('/a/c/o', 2), ['a', 'c/o'])
+        self.assertRaises(ValueError, utils.split_fingerprint_path, '/a/c/o', 4)
+        self.assertEquals(utils.split_fingerprint_path('/a/c/o/r', 2),
+                          ['a', 'c/o/r'])
+        self.assertEquals(utils.split_fingerprint_path('/a/c/', 2), ['a', 'c'])
+        try:
+            utils.split_fingerprint_path('o\nn e', 2)
+        except ValueError as err:
+            self.assertEquals(str(err), 'Invalid path: o%0An%20e')
+        try:
+            utils.split_fingerprint_path('/a', 5, 4)
+        except TypeError as err:
+             self.assertRaises(TypeError, err)
+
     def test_validate_device_partition(self):
         # Test swift.common.utils.validate_device_partition
         utils.validate_device_partition('foo', 'bar')

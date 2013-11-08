@@ -45,7 +45,7 @@ from swift.common.swob import multi_range_iterator
 PICKLE_PROTOCOL = 2
 ONE_WEEK = 604800
 HASH_FILE = 'hashes.pkl'
-METADATA_KEY = 'user.swift.metadata'
+METADATA_KEY = 'user.object.metadata'
 # These are system-set metadata keys that cannot be changed with a POST.
 # They should be lowercase.
 DATAFILE_SYSTEM_META = set('content-length content-type deleted etag'.split())
@@ -360,7 +360,7 @@ class DiskFile(object):
     :param threadpool: thread pool in which to do blocking operations
     """
 
-    def __init__(self, path, device, partition, account, container, obj,
+    def __init__(self, path, device, partition, fingerprint,
                  logger, disk_chunk_size=65536,
                  bytes_per_sync=(512 * 1024 * 1024),
                  iter_hook=None, threadpool=None, obj_dir='objects',

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""" Object Server for Swift """
+""" Content Address Object Server """
 
 from __future__ import with_statement
 import cPickle as pickle
@@ -44,7 +44,7 @@ from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPCreated, \
     HTTPClientDisconnect, HTTPMethodNotAllowed, Request, Response, UTC, \
     HTTPInsufficientStorage, HTTPForbidden, HTTPException, HeaderKeyDict, \
     HTTPConflict
-from swift.obj.diskfile import DATAFILE_SYSTEM_META, DiskFile, \
+from swift.objects.diskfile import DATAFILE_SYSTEM_META, DiskFile, \
     get_hashes
 
 
@@ -283,8 +283,10 @@ class ObjectController(object):
     @timing_stats()
     def POST(self, request):
         """Handle HTTP POST requests for the Swift Object Server."""
-        device, partition, account, container, obj = \
-            split_and_validate_path(request, 5, 5, True)
+        #device, partition, account, container, obj = \
+        #    split_and_validate_path(request, 5, 5, True)
+        //TODO
+        device, partition = fingerprint_and_validate_path(request, )
 
         if 'x-timestamp' not in request.headers or \
                 not check_float(request.headers['x-timestamp']):
@@ -332,15 +334,14 @@ class ObjectController(object):
     @public
     @timing_stats()
     def PUT(self, request):
-        """Handle HTTP PUT requests for the Swift Object Server."""
-        device, partition, account, container, obj = \
-            split_and_validate_path(request, 5, 5, True)
+        """Handle HTTP PUT requests for the WindChimes Object Server."""
+        device, partition, fingerprint, backref = fingerprint2path_and_validate(request, 4)
 
         if 'x-timestamp' not in request.headers or \
                 not check_float(request.headers['x-timestamp']):
             return HTTPBadRequest(body='Missing timestamp', request=request,
                                   content_type='text/plain')
-        error_response = check_object_creation(request, obj)
+        error_response = check_object_creation(request, fingerprint)
         if error_response:
             return error_response
         new_delete_at = int(request.headers.get('X-Delete-At') or 0)
@@ -353,8 +354,7 @@ class ObjectController(object):
             return HTTPBadRequest(body=str(e), request=request,
                                   content_type='text/plain')
         try:
-            disk_file = self._diskfile(device, partition, account, container,
-                                       obj)
+            disk_file = self._diskfile(device, partition, fingerprint)
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)
         with disk_file.open():
@@ -416,7 +416,7 @@ class ObjectController(object):
                     request, device)
         if not orig_timestamp or \
                 orig_timestamp < request.headers['x-timestamp']:
-            self.container_update(
+            self.application_update(
                 'PUT', account, container, obj, request,
                 HeaderKeyDict({
                     'x-size': metadata['Content-Length'],

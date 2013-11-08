@@ -514,6 +514,27 @@ def split_path(path, minsegs=1, maxsegs=None, rest_with_last=False):
     segs.extend([None] * (maxsegs - 1 - len(segs)))
     return segs
 
+def split_fingerprint_path(path, seg_num = None):
+    """
+    Validate and split the given fingerprint based HTTP request path.
+
+    **Examples**::
+
+        ['finger', 'app-uid'] = split_fingerprint_path('/finger/app-uid', 2)
+        ['a', None] = split_fingerprint_path('/finger', 1)
+
+    :param path: HTTP Request path to be split
+    :param minsegs: Minimum number of segments to be extracted
+    :param maxsegs: Maximum number of segments to be extracted
+    :returns: list of segments with a length of maxsegs (non-existant
+              segments will return as None)
+    :raises: ValueError if given an invalid path
+    """
+    if path[-1:] == '/':
+        path = path[:-1]
+
+    return split_path(path, seg_num, seg_num, True)
+
 
 def validate_device_partition(device, partition):
     """
