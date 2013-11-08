@@ -1173,6 +1173,18 @@ def storage_directory(datadir, partition, name_hash):
     return os.path.join(datadir, str(partition), name_hash[-3:], name_hash)
 
 
+def fingerprint_directory(datadir, partition, name_hash):
+    """
+    Get the storage directory for fingerprint
+
+    :param datadir: Base data directory
+    :param partition: Partition
+    :param name_hash: Account, container or object name hash
+    :returns: Storage directory
+    """
+    return os.path.join(datadir, str(partition), name_hash[-3:])
+
+
 def hash_path(account, container=None, object=None, raw_digest=False):
     """
     Get the canonical hash for an account/container/object
