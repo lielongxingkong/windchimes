@@ -58,6 +58,10 @@ class DiskFileDeviceUnavailable(DiskFileError):
     pass
 
 
+class DiskFileBackReferenceError(DiskFileError):
+    pass
+
+
 class PathNotDir(OSError):
     pass
 
