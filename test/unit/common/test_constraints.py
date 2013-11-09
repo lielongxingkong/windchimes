@@ -206,6 +206,17 @@ class TestConstraints(unittest.TestCase):
                 'manifest')
         self.assertEquals(resp.status_int, HTTP_BAD_REQUEST)
 
+    def test_check_fingerprint_object_creation_name_length(self):
+        headers = {'Transfer-Encoding': 'chunked',
+                   'Content-Type': 'text/plain'}
+        name = 'o' * constraints.FINGERPRINT_LENGTH
+        self.assertEquals(constraints.check_fingerprint_object_creation(Request.blank(
+            '/', headers=headers), name), None)
+        name = 'o' * (constraints.MAX_OBJECT_NAME_LENGTH + 1)
+        self.assertEquals(constraints.check_fingerprint_object_creation(
+            Request.blank('/', headers=headers), name).status_int,
+            HTTP_BAD_REQUEST)
+
     def test_check_mount(self):
         self.assertFalse(constraints.check_mount('', ''))
         with mock.patch("swift.common.constraints.ismount", MockTrue()):

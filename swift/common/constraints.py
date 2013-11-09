@@ -60,6 +60,8 @@ MAX_CONTAINER_NAME_LENGTH = constraints_conf_int('max_container_name_length',
 # Maximum slo segments in buffer
 MAX_BUFFERED_SLO_SEGMENTS = 10000
 
+FINGERPRINT_LENGTH = constraints_conf_int('fingerprint_length', 32)
+#: Fingerprint length effected by hash algorithm
 
 #: Query string format= values to their corresponding content-type values
 FORMAT2CONTENT_TYPE = {'plain': 'text/plain', 'json': 'application/json',
@@ -157,6 +159,25 @@ def check_object_creation(req, object_name):
                 request=req,
                 body='X-Object-Manifest must in the format container/prefix')
     return check_metadata(req, 'object')
+
+
+def check_fingerprint_object_creation(req, fingerprint):
+    """
+    Check to ensure that everything is alright about an object to be created.
+
+    :param req: HTTP request object
+    :param fingerprint: fingerprint of object to be created
+    :returns HTTPRequestEntityTooLarge: the object is too large
+    :returns HTTPLengthRequired: missing content-length header and not
+                                 a chunked request
+    :returns HTTPBadRequest: missing or bad content-type header, or
+                             bad metadata
+    """
+    if len(fingerprint) != FINGERPRINT_LENGTH:
+        return HTTPBadRequest(body='Finger Print length of %d not equal to %d' %
+                              (len(fingerprint), FINGERPRINT_LENGTH),
+                              request=req, content_type='text/plain')
+    return check_object_creation(req, fingerprint)
 
 
 def check_mount(root, drive):
