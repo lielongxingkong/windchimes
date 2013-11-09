@@ -11,10 +11,11 @@ class simpleTest(unittest.TestCase):
         pass
 
     def test_finger_to_path(self):
-        request = Request.blank('/sda1/p/fingerprint/uni-refer')
-        self.assertEqual(fingerprint2path_and_validate(request, 4), ['sda1', 'p', 'fingerprint', 'uni-refer'])
-        self.assertRaises(Exception, fingerprint2path_and_validate, request, 5)
-        self.assertEqual(fingerprint2path_and_validate(request, 3), ['sda1', 'p', 'fingerprint/uni-refer'])
+        request = Request.blank('/sda1/p/fingerprint/uni/a/c/o/d',environ={'REQUEST_METHOD': 'PUT'})
+        self.assertEqual(fingerprint2path_and_validate(request, 5), ['sda1', 'p', 'fingerprint', 'uni', 'a/c/o/d'])
+        self.assertRaises(Exception, fingerprint2path_and_validate, request, 3)
+        request.method = "HEAD"
+        self.assertEqual(fingerprint2path_and_validate(request, 3), ['sda1', 'p', 'fingerprint/uni/a/c/o/d'])
 
 if '__main__' == __name__:
     unittest.main()
