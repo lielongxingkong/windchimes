@@ -1197,6 +1197,12 @@ def hash_path(account, container=None, object=None, raw_digest=False):
         return md5(HASH_PATH_PREFIX + '/' + '/'.join(paths)
                    + HASH_PATH_SUFFIX).hexdigest()
 
+def hash_path_for_backref(backref, raw_digest=False):
+    if raw_digest:
+        return md5(HASH_PATH_PREFIX + backref + HASH_PATH_SUFFIX).digest()
+    else:
+        return md5(HASH_PATH_PREFIX + backref + HASH_PATH_SUFFIX).hexdigest()
+
 
 @contextmanager
 def lock_path(directory, timeout=10):

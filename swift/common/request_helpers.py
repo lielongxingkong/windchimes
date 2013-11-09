@@ -95,8 +95,12 @@ def fingerprint2path_and_validate(request, seg_num):
     :returns: result of split_path if everything's okay
     :raises: HTTPBadRequest if something's not okay
     """
+    segs_len_map = {'PUT':5, 'POST':3, 'DELETE':5, 'GET':3, 'HEAD':3}
     try:
         segs = split_fingerprint_path(unquote(request.path), seg_num)
+        if len(segs) != segs_len_map[request.method]:
+            raise HTTPBadRequest(body="Format of path is not Correct", request=request,
+                             content_type='text/plain')
         validate_device_partition(segs[0], segs[1])
         return segs
     except ValueError as err:
