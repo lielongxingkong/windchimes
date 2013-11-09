@@ -31,13 +31,13 @@ from swift.common.utils import mkdirs, normalize_timestamp, public, \
     hash_path, get_logger, write_pickle, config_true_value, timing_stats, \
     ThreadPool, replication
 from swift.common.bufferedhttp import http_connect
-from swift.common.constraints import check_object_creation, check_mount, \
+from swift.common.constraints import check_fingerprint_object_creation, check_mount, \
     check_float, check_utf8
 from swift.common.exceptions import ConnectionTimeout, DiskFileError, \
     DiskFileNotExist, DiskFileCollision, DiskFileNoSpace, \
-    DiskFileDeviceUnavailable
+    DiskFileDeviceUnavailable, DiskFileBackReferenceError
 from swift.common.http import is_success
-from swift.common.request_helpers import split_and_validate_path
+from swift.common.request_helpers import split_and_validate_path, fingerprint2path_and_validate
 from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPCreated, \
     HTTPInternalServerError, HTTPNoContent, HTTPNotFound, HTTPNotModified, \
     HTTPPreconditionFailed, HTTPRequestTimeout, HTTPUnprocessableEntity, \
@@ -64,6 +64,7 @@ class ObjectController(object):
         /etc/swift/object-server.conf-sample.
         """
         self.logger = get_logger(conf, log_route='object-server')
+        self.app_layer = conf.get('app_layer', 'Swift-Object')
         self.devices = conf.get('devices', '/srv/node/')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
         self.node_timeout = int(conf.get('node_timeout', 3))
@@ -106,25 +107,26 @@ class ObjectController(object):
         self.expiring_objects_container_divisor = \
             int(conf.get('expiring_objects_container_divisor') or 86400)
 
-    def _diskfile(self, device, partition, account, container, obj, **kwargs):
+    def _diskfile(self, device, partition, fingerprint, **kwargs):
         """Utility method for instantiating a DiskFile."""
         kwargs.setdefault('mount_check', self.mount_check)
         kwargs.setdefault('bytes_per_sync', self.bytes_per_sync)
         kwargs.setdefault('disk_chunk_size', self.disk_chunk_size)
         kwargs.setdefault('threadpool', self.threadpools[device])
         kwargs.setdefault('obj_dir', DATADIR)
-        return DiskFile(self.devices, device, partition, account,
-                        container, obj, self.logger, **kwargs)
+        return DiskFile(self.devices, device, partition, fingerprint, self.logger, **kwargs)
 
-    def async_update(self, op, account, container, obj, host, partition,
+    def check_exists(self, diskfile):
+        objfile = os.path.join(diskfile.datadir, diskfile.name + '.data')
+        return os.path.isfile(objfile)
+
+    def async_update(self, op, backref, host, partition,
                      contdevice, headers_out, objdevice):
         """
         Sends or saves an async update.
 
         :param op: operation performed (ex: 'PUT', or 'DELETE')
-        :param account: account name for the object
-        :param container: container name for the object
-        :param obj: object name
+        :param backref: backrefence to app layer
         :param host: host that the container is on
         :param partition: partition that the container is on
         :param contdevice: device name that the container is on
@@ -132,8 +134,8 @@ class ObjectController(object):
                             request
         :param objdevice: device name that the object is in
         """
-        headers_out['user-agent'] = 'obj-server %s' % os.getpid()
-        full_path = '/%s/%s/%s' % (account, container, obj)
+        headers_out['user-agent'] = 'storage-service %s' % os.getpid()
+        full_path = '/' + backref
         if all([host, partition, contdevice]):
             try:
                 with ConnectionTimeout(self.conn_timeout):
@@ -154,21 +156,20 @@ class ObjectController(object):
                              'dev': contdevice})
             except (Exception, Timeout):
                 self.logger.exception(_(
-                    'ERROR container update failed with '
+                    'ERROR application layer update failed with '
                     '%(ip)s:%(port)s/%(dev)s (saving for async update later)'),
                     {'ip': ip, 'port': port, 'dev': contdevice})
         async_dir = os.path.join(self.devices, objdevice, ASYNCDIR)
-        ohash = hash_path(account, container, obj)
+        ohash = hash_path(backref)
         self.logger.increment('async_pendings')
         self.threadpools[objdevice].run_in_thread(
             write_pickle,
-            {'op': op, 'account': account, 'container': container,
-             'obj': obj, 'headers': headers_out},
+            {'op': op, 'backref': backref, 'headers': headers_out},
             os.path.join(async_dir, ohash[-3:], ohash + '-' +
                          normalize_timestamp(headers_out['x-timestamp'])),
             os.path.join(self.devices, objdevice, 'tmp'))
 
-    def container_update(self, op, account, container, obj, request,
+    def application_async_update(self, op, backref, request,
                          headers_out, objdevice):
         """
         Update the container when objects are updated.
@@ -183,20 +184,21 @@ class ObjectController(object):
         :param objdevice: device name that the object is in
         """
         headers_in = request.headers
+        app_layer = self.app_layer
         conthosts = [h.strip() for h in
-                     headers_in.get('X-Container-Host', '').split(',')]
+                headers_in.get('X-%s-Host' % app_layer, '').split(',')]
         contdevices = [d.strip() for d in
-                       headers_in.get('X-Container-Device', '').split(',')]
-        contpartition = headers_in.get('X-Container-Partition', '')
+                       headers_in.get('X-%s-Device' % app_layer, '').split(',')]
+        contpartition = headers_in.get('X-%s-Partition' % app_layer, '')
 
         if len(conthosts) != len(contdevices):
             # This shouldn't happen unless there's a bug in the proxy,
             # but if there is, we want to know about it.
-            self.logger.error(_('ERROR Container update failed: different  '
+            self.logger.error(_('ERROR Application layer update failed: different  '
                                 'numbers of hosts and devices in request: '
                                 '"%s" vs "%s"') %
-                               (headers_in.get('X-Container-Host', ''),
-                                headers_in.get('X-Container-Device', '')))
+                               (headers_in.get('X-%s-Host' % app_layer, ''),
+                                headers_in.get('X-%s-Device' % app_layer, '')))
             return
 
         if contpartition:
@@ -207,86 +209,17 @@ class ObjectController(object):
         headers_out['x-trans-id'] = headers_in.get('x-trans-id', '-')
         headers_out['referer'] = request.as_referer()
         for conthost, contdevice in updates:
-            self.async_update(op, account, container, obj, conthost,
+            self.async_update(op, backref, conthost,
                               contpartition, contdevice, headers_out,
                               objdevice)
 
-    def delete_at_update(self, op, delete_at, account, container, obj,
-                         request, objdevice):
-        """
-        Update the expiring objects container when objects are updated.
-
-        :param op: operation performed (ex: 'PUT', or 'DELETE')
-        :param delete_at: scheduled delete in UNIX seconds, int
-        :param account: account name for the object
-        :param container: container name for the object
-        :param obj: object name
-        :param request: the original request driving the update
-        :param objdevice: device name that the object is in
-        """
-        # Quick cap that will work from now until Sat Nov 20 17:46:39 2286
-        # At that time, Swift will be so popular and pervasive I will have
-        # created income for thousands of future programmers.
-        delete_at = max(min(delete_at, 9999999999), 0)
-        updates = [(None, None)]
-
-        partition = None
-        hosts = contdevices = [None]
-        headers_in = request.headers
-        headers_out = HeaderKeyDict({
-            'x-timestamp': headers_in['x-timestamp'],
-            'x-trans-id': headers_in.get('x-trans-id', '-'),
-            'referer': request.as_referer()})
-        if op != 'DELETE':
-            delete_at_container = headers_in.get('X-Delete-At-Container', None)
-            if not delete_at_container:
-                self.logger.warning(
-                    'X-Delete-At-Container header must be specified for '
-                    'expiring objects background %s to work properly. Making '
-                    'best guess as to the container name for now.' % op)
-                # TODO(gholt): In a future release, change the above warning to
-                # a raised exception and remove the guess code below.
-                delete_at_container = str(
-                    delete_at / self.expiring_objects_container_divisor *
-                    self.expiring_objects_container_divisor)
-            partition = headers_in.get('X-Delete-At-Partition', None)
-            hosts = headers_in.get('X-Delete-At-Host', '')
-            contdevices = headers_in.get('X-Delete-At-Device', '')
-            updates = [upd for upd in
-                       zip((h.strip() for h in hosts.split(',')),
-                           (c.strip() for c in contdevices.split(',')))
-                       if all(upd) and partition]
-            if not updates:
-                updates = [(None, None)]
-            headers_out['x-size'] = '0'
-            headers_out['x-content-type'] = 'text/plain'
-            headers_out['x-etag'] = 'd41d8cd98f00b204e9800998ecf8427e'
-        else:
-            # DELETEs of old expiration data have no way of knowing what the
-            # old X-Delete-At-Container was at the time of the initial setting
-            # of the data, so a best guess is made here.
-            # Worst case is a DELETE is issued now for something that doesn't
-            # exist there and the original data is left where it is, where
-            # it will be ignored when the expirer eventually tries to issue the
-            # object DELETE later since the X-Delete-At value won't match up.
-            delete_at_container = str(
-                delete_at / self.expiring_objects_container_divisor *
-                self.expiring_objects_container_divisor)
-
-        for host, contdevice in updates:
-            self.async_update(
-                op, self.expiring_objects_account, delete_at_container,
-                '%s-%s/%s/%s' % (delete_at, account, container, obj),
-                host, partition, contdevice, headers_out, objdevice)
 
     @public
     @timing_stats()
     def POST(self, request):
         """Handle HTTP POST requests for the Swift Object Server."""
-        #device, partition, account, container, obj = \
-        #    split_and_validate_path(request, 5, 5, True)
-        //TODO
-        device, partition = fingerprint_and_validate_path(request, )
+        device, partition, account, container, obj = \
+            split_and_validate_path(request, 5, 5, True)
 
         if 'x-timestamp' not in request.headers or \
                 not check_float(request.headers['x-timestamp']):
@@ -335,19 +268,16 @@ class ObjectController(object):
     @timing_stats()
     def PUT(self, request):
         """Handle HTTP PUT requests for the WindChimes Object Server."""
-        device, partition, fingerprint, backref = fingerprint2path_and_validate(request, 4)
+        device, partition, fingerprint, uid, backref= fingerprint2path_and_validate(request, 5)
 
         if 'x-timestamp' not in request.headers or \
                 not check_float(request.headers['x-timestamp']):
             return HTTPBadRequest(body='Missing timestamp', request=request,
                                   content_type='text/plain')
-        error_response = check_object_creation(request, fingerprint)
+        error_response = check_fingerprint_object_creation(request, fingerprint)
         if error_response:
             return error_response
-        new_delete_at = int(request.headers.get('X-Delete-At') or 0)
-        if new_delete_at and new_delete_at < time.time():
-            return HTTPBadRequest(body='X-Delete-At in past', request=request,
-                                  content_type='text/plain')
+
         try:
             fsize = request.message_length()
         except ValueError as e:
@@ -359,72 +289,91 @@ class ObjectController(object):
             return HTTPInsufficientStorage(drive=device, request=request)
         with disk_file.open():
             orig_metadata = disk_file.get_metadata()
-        old_delete_at = int(orig_metadata.get('X-Delete-At') or 0)
         orig_timestamp = orig_metadata.get('X-Timestamp')
         if orig_timestamp and orig_timestamp >= request.headers['x-timestamp']:
             return HTTPConflict(request=request)
-        upload_expiration = time.time() + self.max_upload_time
-        etag = md5()
-        elapsed_time = 0
+
+        if not self.check_exists(disk_file):
+            upload_expiration = time.time() + self.max_upload_time
+            etag = md5()
+            elapsed_time = 0
+            try:
+                with disk_file.create(size=fsize) as writer:
+                    reader = request.environ['wsgi.input'].read
+                    for chunk in iter(lambda: reader(self.network_chunk_size), ''):
+                        start_time = time.time()
+                        if start_time > upload_expiration:
+                            self.logger.increment('PUT.timeouts')
+                            return HTTPRequestTimeout(request=request)
+                        etag.update(chunk)
+                        writer.write(chunk)
+                        sleep()
+                        elapsed_time += time.time() - start_time
+                    upload_size = writer.upload_size
+                    if upload_size:
+                        self.logger.transfer_rate(
+                            'PUT.' + device + '.timing', elapsed_time,
+                            upload_size)
+                    if fsize is not None and fsize != upload_size:
+                        return HTTPClientDisconnect(request=request)
+                    etag = etag.hexdigest()
+                    if 'etag' in request.headers and \
+                            request.headers['etag'].lower() != etag:
+                        return HTTPUnprocessableEntity(request=request)
+                    metadata = {
+                        'X-Timestamp': request.headers['x-timestamp'],
+                        'Content-Type': request.headers['content-type'],
+                        'ETag': etag,
+                        'Content-Length': str(upload_size),
+                        'Finger-Print': str(disk_file.fingerprint),
+                    }
+
+                    metadata.update(val for val in request.headers.iteritems()
+                                    if val[0].lower().startswith('x-object-meta-')
+                                    and len(val[0]) > 14)
+                    for header_key in self.allowed_headers:
+                        if header_key in request.headers:
+                            header_caps = header_key.title()
+                            metadata[header_caps] = request.headers[header_key]
+                    try:
+                        metadata = disk_file.back_reference(backref, uid, metadata)
+                    except DiskFileBackReferenceError:
+                        return HTTPBadRequest(body='Backreference error', request=request,
+                                            content_type='text/plain')
+                    if metadata != None:
+                        writer.put(metadata)
+                    else:
+                        return HTTPBadRequest(body='Metadata ruin during back refer', request=request,
+                                            content_type='text/plain')
+            except DiskFileNoSpace:
+                return HTTPInsufficientStorage(drive=device, request=request)
+        else:
+#TODO check metadata is same
+            try:
+                metadata = disk_file.back_reference(backref, uid, orig_metadata)
+            except DiskFileBackReferenceError:
+                return HTTPBadRequest(body='Backreference error', request=request,
+                                    content_type='text/plain')
+            metadata['X-Timestamp'] = request.headers['x-timestamp']
+
+#TODO check content and finger print
         try:
-            with disk_file.create(size=fsize) as writer:
-                reader = request.environ['wsgi.input'].read
-                for chunk in iter(lambda: reader(self.network_chunk_size), ''):
-                    start_time = time.time()
-                    if start_time > upload_expiration:
-                        self.logger.increment('PUT.timeouts')
-                        return HTTPRequestTimeout(request=request)
-                    etag.update(chunk)
-                    writer.write(chunk)
-                    sleep()
-                    elapsed_time += time.time() - start_time
-                upload_size = writer.upload_size
-                if upload_size:
-                    self.logger.transfer_rate(
-                        'PUT.' + device + '.timing', elapsed_time,
-                        upload_size)
-                if fsize is not None and fsize != upload_size:
-                    return HTTPClientDisconnect(request=request)
-                etag = etag.hexdigest()
-                if 'etag' in request.headers and \
-                        request.headers['etag'].lower() != etag:
-                    return HTTPUnprocessableEntity(request=request)
-                metadata = {
-                    'X-Timestamp': request.headers['x-timestamp'],
-                    'Content-Type': request.headers['content-type'],
-                    'ETag': etag,
-                    'Content-Length': str(upload_size),
-                }
-                metadata.update(val for val in request.headers.iteritems()
-                                if val[0].lower().startswith('x-object-meta-')
-                                and len(val[0]) > 14)
-                for header_key in self.allowed_headers:
-                    if header_key in request.headers:
-                        header_caps = header_key.title()
-                        metadata[header_caps] = request.headers[header_key]
-                writer.put(metadata)
-        except DiskFileNoSpace:
-            return HTTPInsufficientStorage(drive=device, request=request)
-        if old_delete_at != new_delete_at:
-            if new_delete_at:
-                self.delete_at_update(
-                    'PUT', new_delete_at, account, container, obj,
-                    request, device)
-            if old_delete_at:
-                self.delete_at_update(
-                    'DELETE', old_delete_at, account, container, obj,
-                    request, device)
-        if not orig_timestamp or \
-                orig_timestamp < request.headers['x-timestamp']:
-            self.application_update(
-                'PUT', account, container, obj, request,
+            if fingerprint != metadata['Finger-Print']:
+                return HTTPBadRequest(body="Req finger not match finger in Meta",
+                                  request=request, content_type='text/plain')
+        except KeyError, e:
+            return HTTPBadRequest(body=str(e), request=request,
+                                  content_type='text/plain')
+
+        self.application_async_update('PUT', backref, request,
                 HeaderKeyDict({
                     'x-size': metadata['Content-Length'],
                     'x-content-type': metadata['Content-Type'],
+                    'x-fingerprint': metadata['Finger-Print'],
                     'x-timestamp': metadata['X-Timestamp'],
                     'x-etag': metadata['ETag']}),
                 device)
-        resp = HTTPCreated(request=request, etag=etag)
+        resp = HTTPCreated(request=request, etag=metadata['ETag'])
         return resp
 
     @public

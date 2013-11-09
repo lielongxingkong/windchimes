@@ -34,11 +34,11 @@ from eventlet import Timeout
 from swift import gettext_ as _
 from swift.common.constraints import check_mount
 from swift.common.utils import mkdirs, normalize_timestamp, \
-    storage_directory, hash_path, renamer, fallocate, fsync, \
+    storage_directory, renamer, fallocate, fsync, \
     fdatasync, drop_buffer_cache, ThreadPool, lock_path, write_pickle
 from swift.common.exceptions import DiskFileError, DiskFileNotExist, \
     DiskFileCollision, DiskFileNoSpace, DiskFileDeviceUnavailable, \
-    PathNotDir, DiskFileNotOpenError
+    PathNotDir, DiskFileNotOpenError, DiskFileBackReferenceError
 from swift.common.swob import multi_range_iterator
 
 
@@ -336,9 +336,8 @@ class DiskWriter(object):
         """
         if not self.tmppath:
             raise ValueError("tmppath is unusable.")
-        timestamp = normalize_timestamp(metadata['X-Timestamp'])
         metadata['name'] = self.disk_file.name
-        target_path = join(self.disk_file.datadir, timestamp + extension)
+        target_path = join(self.disk_file.datadir, self.disk_file.name + extension)
 
         self.threadpool.force_run_in_thread(
             self._finalize_put, metadata, target_path)
@@ -370,8 +369,9 @@ class DiskFile(object):
         self.disk_chunk_size = disk_chunk_size
         self.bytes_per_sync = bytes_per_sync
         self.iter_hook = iter_hook
-        self.name = '/' + '/'.join((account, container, obj))
-        name_hash = hash_path(account, container, obj)
+        self.name = fingerprint
+        self.fingerprint = fingerprint
+        name_hash = fingerprint
         self.datadir = join(
             path, device, storage_directory(obj_dir, partition, name_hash))
         self.device_path = join(path, device)
@@ -703,6 +703,29 @@ class DiskFile(object):
         extension = '.ts' if tombstone else '.meta'
         with self.create() as writer:
             writer.put(metadata, extension=extension)
+
+    def back_reference(self, backpath, uid, metadata = None):
+        if metadata == None:
+            metadata = read_metadata(self.fp)
+        try:
+            if not metadata.has_key('Backrefer-List') or metadata['Backrefer-List'] == None:
+                metadata['Backrefer-List'] = {backpath : uid}
+            else:
+                metadata['Backrefer-List'][backpath] = uid
+            if metadata == None:
+                self.put_metadata(metadata)
+            else:
+                return metadata
+        except KeyError:
+            raise DiskFileBackReferenceError("Back Reference in Metadata is not correct")
+
+    def del_back_reference(self, backpath, uid ):
+        metadata = self.get_metadata()
+        try:
+            metadata['Backrefer-List'].pop(backpath)
+            self.put_metadata(metadata)
+        except KeyError:
+            raise DiskFileBackReferenceError("Back Reference in Metadata is not correct")
 
     def delete(self, timestamp):
         """
