@@ -20,9 +20,9 @@ Why not swift.common.utils, you ask? Because this way we can import things
 from swob in here without creating circular imports.
 """
 
-from swift.common.constraints import FORMAT2CONTENT_TYPE
+from swift.common.constraints import FORMAT2CONTENT_TYPE, FINGERPRINT_LENGTH
 from swift.common.swob import HTTPBadRequest, HTTPNotAcceptable
-from swift.common.utils import split_path, validate_device_partition, split_fingerprint_path
+from swift.common.utils import split_path, validate_device_partition
 from urllib import unquote
 
 
@@ -88,21 +88,29 @@ def split_and_validate_path(request, minsegs=1, maxsegs=None,
         raise HTTPBadRequest(body=str(err), request=request,
                              content_type='text/plain')
 
-def fingerprint2path_and_validate(request, seg_num):
+def split_and_validate_fingerprint_path(request, op):
     """
-    Utility function to get path from fingerprint.
+    Utility function to split and validate the request path.
 
     :returns: result of split_path if everything's okay
     :raises: HTTPBadRequest if something's not okay
     """
-    segs_len_map = {'PUT':5, 'POST':3, 'DELETE':5, 'GET':3, 'HEAD':3}
+    op_map = {
+                'PUT'    : {'minsegs':5, 'maxsegs':5, 'rest_with_last' : True},
+                'GET'    : {'minsegs':4, 'maxsegs':4, 'rest_with_last' : True},
+                'HEAD'   : {'minsegs':4, 'maxsegs':4, 'rest_with_last' : True},
+                'DELETE' : {'minsegs':5, 'maxsegs':5, 'rest_with_last' : True},
+                'POST'   : {'minsegs':4, 'maxsegs':4, 'rest_with_last' : True},
+            }
     try:
-        segs = split_fingerprint_path(unquote(request.path), seg_num)
-        if len(segs) != segs_len_map[request.method]:
-            raise HTTPBadRequest(body="Format of path is not Correct", request=request,
+        segs = split_and_validate_path(request, op_map[op]['minsegs'],  op_map[op]['maxsegs'],  op_map[op]['rest_with_last'])
+        if len(segs[2]) == FINGERPRINT_LENGTH:
+            return segs
+        else:
+            raise HTTPBadRequest(body="FingerPrint length incorrect and is %d" % len(segs[2]), request=request,
                              content_type='text/plain')
-        validate_device_partition(segs[0], segs[1])
-        return segs
     except ValueError as err:
         raise HTTPBadRequest(body=str(err), request=request,
                              content_type='text/plain')
+
+

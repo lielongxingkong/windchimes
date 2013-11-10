@@ -161,25 +161,6 @@ def check_object_creation(req, object_name):
     return check_metadata(req, 'object')
 
 
-def check_fingerprint_object_creation(req, fingerprint):
-    """
-    Check to ensure that everything is alright about an object to be created.
-
-    :param req: HTTP request object
-    :param fingerprint: fingerprint of object to be created
-    :returns HTTPRequestEntityTooLarge: the object is too large
-    :returns HTTPLengthRequired: missing content-length header and not
-                                 a chunked request
-    :returns HTTPBadRequest: missing or bad content-type header, or
-                             bad metadata
-    """
-    if len(fingerprint) != FINGERPRINT_LENGTH:
-        return HTTPBadRequest(body='Finger Print length of %d not equal to %d' %
-                              (len(fingerprint), FINGERPRINT_LENGTH),
-                              request=req, content_type='text/plain')
-    return check_object_creation(req, fingerprint)
-
-
 def check_mount(root, drive):
     """
     Verify that the path to the device is a mount point and mounted.  This
