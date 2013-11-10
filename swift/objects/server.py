@@ -31,13 +31,13 @@ from swift.common.utils import mkdirs, normalize_timestamp, public, \
     hash_path, get_logger, write_pickle, config_true_value, timing_stats, \
     ThreadPool, replication
 from swift.common.bufferedhttp import http_connect
-from swift.common.constraints import check_fingerprint_object_creation, check_mount, \
+from swift.common.constraints import check_object_creation, check_mount, \
     check_float, check_utf8
 from swift.common.exceptions import ConnectionTimeout, DiskFileError, \
     DiskFileNotExist, DiskFileCollision, DiskFileNoSpace, \
-    DiskFileDeviceUnavailable, DiskFileBackReferenceError
+    DiskFileDeviceUnavailable
 from swift.common.http import is_success
-from swift.common.request_helpers import split_and_validate_path, fingerprint2path_and_validate
+from swift.common.request_helpers import split_and_validate_path, split_and_validate_fingerprint_path
 from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPCreated, \
     HTTPInternalServerError, HTTPNoContent, HTTPNotFound, HTTPNotModified, \
     HTTPPreconditionFailed, HTTPRequestTimeout, HTTPUnprocessableEntity, \
@@ -88,7 +88,6 @@ class ObjectController(object):
         default_allowed_headers = '''
             content-disposition,
             content-encoding,
-            x-delete-at,
             x-object-manifest,
             x-static-large-object,
         '''
@@ -119,6 +118,17 @@ class ObjectController(object):
     def check_exists(self, diskfile):
         objfile = os.path.join(diskfile.datadir, diskfile.name + '.data')
         return os.path.isfile(objfile)
+
+    def back_reference(self, backpath, uid, metadata):
+        if metadata.has_key('Backrefer-List') == False or metadata['Backrefer-List'] == None:
+            metadata['Backrefer-List'] = { backpath : uid }
+        else:
+            metadata['Backrefer-List'][backpath] = uid
+        return metadata
+
+    def del_back_reference(self, backpath, uid, metadata):
+        metadata['Backrefer-List'].pop(backpath)
+        return metadata
 
     def async_update(self, op, backref, host, partition,
                      contdevice, headers_out, objdevice):
@@ -218,24 +228,18 @@ class ObjectController(object):
     @timing_stats()
     def POST(self, request):
         """Handle HTTP POST requests for the Swift Object Server."""
-        device, partition, account, container, obj = \
-            split_and_validate_path(request, 5, 5, True)
-
+        device, partition, fingerprint, dust = \
+            split_and_validate_fingerprint_path(request, "POST")
         if 'x-timestamp' not in request.headers or \
                 not check_float(request.headers['x-timestamp']):
             return HTTPBadRequest(body='Missing timestamp', request=request,
                                   content_type='text/plain')
-        new_delete_at = int(request.headers.get('X-Delete-At') or 0)
-        if new_delete_at and new_delete_at < time.time():
-            return HTTPBadRequest(body='X-Delete-At in past', request=request,
-                                  content_type='text/plain')
         try:
-            disk_file = self._diskfile(device, partition, account, container,
-                                       obj)
+            disk_file = self._diskfile(device, partition, fingerprint)
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)
         with disk_file.open():
-            if disk_file.is_deleted() or disk_file.is_expired():
+            if disk_file.is_deleted():
                 return HTTPNotFound(request=request)
             try:
                 disk_file.get_data_file_size()
@@ -248,19 +252,11 @@ class ObjectController(object):
             return HTTPConflict(request=request)
         metadata = {'X-Timestamp': request.headers['x-timestamp']}
         metadata.update(val for val in request.headers.iteritems()
-                        if val[0].startswith('X-Object-Meta-'))
+                        if val[0].startswith('X-App-Meta-'))
         for header_key in self.allowed_headers:
             if header_key in request.headers:
                 header_caps = header_key.title()
                 metadata[header_caps] = request.headers[header_key]
-        old_delete_at = int(orig_metadata.get('X-Delete-At') or 0)
-        if old_delete_at != new_delete_at:
-            if new_delete_at:
-                self.delete_at_update('PUT', new_delete_at, account, container,
-                                      obj, request, device)
-            if old_delete_at:
-                self.delete_at_update('DELETE', old_delete_at, account,
-                                      container, obj, request, device)
         disk_file.put_metadata(metadata)
         return HTTPAccepted(request=request)
 
@@ -268,16 +264,16 @@ class ObjectController(object):
     @timing_stats()
     def PUT(self, request):
         """Handle HTTP PUT requests for the WindChimes Object Server."""
-        device, partition, fingerprint, uid, backref= fingerprint2path_and_validate(request, 5)
+        device, partition, fingerprint, uid, backref = \
+            split_and_validate_fingerprint_path(request, "PUT")
 
         if 'x-timestamp' not in request.headers or \
                 not check_float(request.headers['x-timestamp']):
             return HTTPBadRequest(body='Missing timestamp', request=request,
                                   content_type='text/plain')
-        error_response = check_fingerprint_object_creation(request, fingerprint)
+        error_response = check_object_creation(request, fingerprint)
         if error_response:
             return error_response
-
         try:
             fsize = request.message_length()
         except ValueError as e:
@@ -289,11 +285,19 @@ class ObjectController(object):
             return HTTPInsufficientStorage(drive=device, request=request)
         with disk_file.open():
             orig_metadata = disk_file.get_metadata()
+            orig_backref_map= disk_file.get_backref()
+        #check fingerprint
+        orig_fingerprint = orig_metadata.get('Finger-Print')
+        if orig_fingerprint and orig_fingerprint != fingerprint:
+            return HTTPUnprocessableEntity(request = request,
+                    body="Wrong Finger Print %s vs %s" % (orig_fingerprint, fingerprint))
+        #check timestamp
         orig_timestamp = orig_metadata.get('X-Timestamp')
         if orig_timestamp and orig_timestamp >= request.headers['x-timestamp']:
             return HTTPConflict(request=request)
 
-        if not self.check_exists(disk_file):
+        file_exists = self.check_exists(disk_file)
+        if not file_exists:
             upload_expiration = time.time() + self.max_upload_time
             etag = md5()
             elapsed_time = 0
@@ -314,8 +318,10 @@ class ObjectController(object):
                         self.logger.transfer_rate(
                             'PUT.' + device + '.timing', elapsed_time,
                             upload_size)
+                    #check upload size
                     if fsize is not None and fsize != upload_size:
                         return HTTPClientDisconnect(request=request)
+                    #TODO check finger print or change etag to fingerprint
                     etag = etag.hexdigest()
                     if 'etag' in request.headers and \
                             request.headers['etag'].lower() != etag:
@@ -327,68 +333,48 @@ class ObjectController(object):
                         'Content-Length': str(upload_size),
                         'Finger-Print': str(disk_file.fingerprint),
                     }
-
+#TODO User Meta Should be Writen into Every PUT
                     metadata.update(val for val in request.headers.iteritems()
-                                    if val[0].lower().startswith('x-object-meta-')
-                                    and len(val[0]) > 14)
+                        if val[0].lower().startswith('x-app-meta-')
+                        and len(val[0]) > 11)
                     for header_key in self.allowed_headers:
                         if header_key in request.headers:
                             header_caps = header_key.title()
                             metadata[header_caps] = request.headers[header_key]
-                    try:
-                        metadata = disk_file.back_reference(backref, uid, metadata)
-                    except DiskFileBackReferenceError:
-                        return HTTPBadRequest(body='Backreference error', request=request,
-                                            content_type='text/plain')
-                    if metadata != None:
-                        writer.put(metadata)
-                    else:
-                        return HTTPBadRequest(body='Metadata ruin during back refer', request=request,
-                                            content_type='text/plain')
+                    writer.put(metadata)
             except DiskFileNoSpace:
                 return HTTPInsufficientStorage(drive=device, request=request)
-        else:
-#TODO check metadata is same
-            try:
-                metadata = disk_file.back_reference(backref, uid, orig_metadata)
-            except DiskFileBackReferenceError:
-                return HTTPBadRequest(body='Backreference error', request=request,
-                                    content_type='text/plain')
-            metadata['X-Timestamp'] = request.headers['x-timestamp']
 
-#TODO check content and finger print
         try:
-            if fingerprint != metadata['Finger-Print']:
-                return HTTPBadRequest(body="Req finger not match finger in Meta",
-                                  request=request, content_type='text/plain')
-        except KeyError, e:
-            return HTTPBadRequest(body=str(e), request=request,
-                                  content_type='text/plain')
-
+            new_backref_map = self.back_reference(backref, uid, orig_backref_map)
+        except KeyError as err:
+            return HTTPBadRequest(body='Backreference format error' + str(err),
+                    request=request, content_type='text/plain')
+        disk_file.put_backref(new_backref_map)
+        meta_for_update = {
+            'x-size': orig_metadata['Content-Length'] if file_exists else metadata['Content-Length'],
+            'x-content-type': orig_metadata['Content-Type'] if file_exists else metadata['Content-Type'],
+            'x-etag': orig_metadata['ETag'] if file_exists else metadata['ETag'],
+            'x-timestamp': request.headers['x-timestamp'],
+            'x-fingerprint': fingerprint
+        }
         self.application_async_update('PUT', backref, request,
-                HeaderKeyDict({
-                    'x-size': metadata['Content-Length'],
-                    'x-content-type': metadata['Content-Type'],
-                    'x-fingerprint': metadata['Finger-Print'],
-                    'x-timestamp': metadata['X-Timestamp'],
-                    'x-etag': metadata['ETag']}),
-                device)
-        resp = HTTPCreated(request=request, etag=metadata['ETag'])
+                HeaderKeyDict(meta_for_update), device)
+        resp = HTTPCreated(request=request, etag=meta_for_update['x-etag'])
         return resp
 
     @public
     @timing_stats()
     def GET(self, request):
         """Handle HTTP GET requests for the Swift Object Server."""
-        device, partition, account, container, obj = \
-            split_and_validate_path(request, 5, 5, True)
+        device, partition, fingerprint, dust = \
+            split_and_validate_fingerprint_path(request, "GET")
         try:
-            disk_file = self._diskfile(device, partition, account, container,
-                                       obj, iter_hook=sleep)
+            disk_file = self._diskfile(device, partition, fingerprint, iter_hook=sleep)
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)
         disk_file.open()
-        if disk_file.is_deleted() or disk_file.is_expired():
+        if disk_file.is_deleted():
             if request.headers.get('if-match') == '*':
                 return HTTPPreconditionFailed(request=request)
             else:
@@ -398,6 +384,7 @@ class ObjectController(object):
         except (DiskFileError, DiskFileNotExist):
             disk_file.quarantine()
             return HTTPNotFound(request=request)
+        import pdb; pdb.set_trace()
         metadata = disk_file.get_metadata()
         if request.headers.get('if-match') not in (None, '*') and \
                 metadata['ETag'] not in request.if_match:
@@ -436,7 +423,7 @@ class ObjectController(object):
         response.headers['Content-Type'] = metadata.get(
             'Content-Type', 'application/octet-stream')
         for key, value in metadata.iteritems():
-            if key.lower().startswith('x-object-meta-') or \
+            if key.lower().startswith('x-app-meta-') or \
                     key.lower() in self.allowed_headers:
                 response.headers[key] = value
         response.etag = metadata['ETag']
@@ -456,15 +443,14 @@ class ObjectController(object):
     @timing_stats(sample_rate=0.8)
     def HEAD(self, request):
         """Handle HTTP HEAD requests for the Swift Object Server."""
-        device, partition, account, container, obj = \
-            split_and_validate_path(request, 5, 5, True)
+        device, partition, fingerprint, dust = \
+            split_and_validate_fingerprint_path(request, "HEAD")
         try:
-            disk_file = self._diskfile(device, partition, account, container,
-                                       obj)
+            disk_file = self._diskfile(device, partition, fingerprint)
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)
         with disk_file.open():
-            if disk_file.is_deleted() or disk_file.is_expired():
+            if disk_file.is_deleted():
                 return HTTPNotFound(request=request)
             try:
                 file_size = disk_file.get_data_file_size()
@@ -476,7 +462,7 @@ class ObjectController(object):
         response.headers['Content-Type'] = metadata.get(
             'Content-Type', 'application/octet-stream')
         for key, value in metadata.iteritems():
-            if key.lower().startswith('x-object-meta-') or \
+            if key.lower().startswith('x-app-meta-') or \
                     key.lower() in self.allowed_headers:
                 response.headers[key] = value
         response.etag = metadata['ETag']
@@ -492,34 +478,23 @@ class ObjectController(object):
     @timing_stats()
     def DELETE(self, request):
         """Handle HTTP DELETE requests for the Swift Object Server."""
-        device, partition, account, container, obj = \
-            split_and_validate_path(request, 5, 5, True)
+        device, partition, fingerprint, uid, backref = \
+            split_and_validate_fingerprint_path(request, "DELETE")
         if 'x-timestamp' not in request.headers or \
                 not check_float(request.headers['x-timestamp']):
             return HTTPBadRequest(body='Missing timestamp', request=request,
                                   content_type='text/plain')
         try:
-            disk_file = self._diskfile(device, partition, account, container,
-                                       obj)
+            disk_file = self._diskfile(device, partition, fingerprint)
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)
         with disk_file.open():
             orig_metadata = disk_file.get_metadata()
             is_deleted = disk_file.is_deleted()
-            is_expired = disk_file.is_expired()
-        if 'x-if-delete-at' in request.headers and \
-                int(request.headers['x-if-delete-at']) != \
-                int(orig_metadata.get('X-Delete-At') or 0):
-            return HTTPPreconditionFailed(
-                request=request,
-                body='X-If-Delete-At and X-Delete-At do not match')
-        old_delete_at = int(orig_metadata.get('X-Delete-At') or 0)
-        if old_delete_at:
-            self.delete_at_update('DELETE', old_delete_at, account,
-                                  container, obj, request, device)
+
         orig_timestamp = orig_metadata.get('X-Timestamp', 0)
         req_timestamp = request.headers['X-Timestamp']
-        if is_deleted or is_expired:
+        if is_deleted:
             response_class = HTTPNotFound
         else:
             if orig_timestamp < req_timestamp:
@@ -527,11 +502,8 @@ class ObjectController(object):
             else:
                 response_class = HTTPConflict
         if orig_timestamp < req_timestamp:
+#TODO unlink
             disk_file.delete(req_timestamp)
-            self.container_update(
-                'DELETE', account, container, obj, request,
-                HeaderKeyDict({'x-timestamp': req_timestamp}),
-                device)
         resp = response_class(request=request)
         return resp
 

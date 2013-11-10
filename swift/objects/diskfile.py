@@ -38,7 +38,7 @@ from swift.common.utils import mkdirs, normalize_timestamp, \
     fdatasync, drop_buffer_cache, ThreadPool, lock_path, write_pickle
 from swift.common.exceptions import DiskFileError, DiskFileNotExist, \
     DiskFileCollision, DiskFileNoSpace, DiskFileDeviceUnavailable, \
-    PathNotDir, DiskFileNotOpenError, DiskFileBackReferenceError
+    PathNotDir, DiskFileNotOpenError
 from swift.common.swob import multi_range_iterator
 
 
@@ -84,6 +84,11 @@ def write_metadata(fd, metadata):
         metastr = metastr[254:]
         key += 1
 
+def read_backref(fp):
+    return pickle.load(fp)
+
+def write_backref(fp, metadata):
+    pickle.dump(metadata, fp, PICKLE_PROTOCOL)
 
 def quarantine_renamer(device_path, corrupted_file_path):
     """
@@ -93,7 +98,6 @@ def quarantine_renamer(device_path, corrupted_file_path):
     :params device_path: The path to the device the corrupted file is on.
     :params corrupted_file_path: The path to the file you want quarantined.
 
-    :returns: path (str) of directory the file was moved to
     :raises OSError: re-raises non errno.EEXIST / errno.ENOTEMPTY
                      exceptions from rename
     """
@@ -128,7 +132,7 @@ def hash_cleanup_listdir(hsh_path, reclaim_age=ONE_WEEK):
                 files.remove(files[0])
     elif files:
         files.sort(reverse=True)
-        meta = data = tomb = None
+        meta = data = tomb = backref = None
         for filename in list(files):
             if not meta and filename.endswith('.meta'):
                 meta = filename
@@ -136,6 +140,8 @@ def hash_cleanup_listdir(hsh_path, reclaim_age=ONE_WEEK):
                 data = filename
             if not tomb and filename.endswith('.ts'):
                 tomb = filename
+            if not backref and filename.endswith('.backref'):
+                backref = filename
             if (filename < tomb or       # any file older than tomb
                 filename < data or       # any file older than data
                 (filename.endswith('.meta') and
@@ -323,7 +329,8 @@ class DiskWriter(object):
         # After the rename completes, this object will be available for
         # other requests to reference.
         renamer(self.tmppath, target_path)
-        hash_cleanup_listdir(self.disk_file.datadir)
+#TODO how to remove this function?
+        #hash_cleanup_listdir(self.disk_file.datadir)
 
     def put(self, metadata, extension='.data'):
         """
@@ -378,6 +385,7 @@ class DiskFile(object):
         self.tmpdir = join(path, device, 'tmp')
         self.logger = logger
         self._metadata = None
+        self._backref = None
         self.data_file = None
         self._data_file_size = None
         self.fp = None
@@ -404,14 +412,15 @@ class DiskFile(object):
 
         :raises DiskFileCollision: on md5 collision
         """
-        data_file, meta_file, ts_file = self._get_ondisk_file()
+        backref_file, data_file, meta_file, ts_file = self._get_ondisk_file()
         if not data_file:
             if ts_file:
                 self._construct_from_ts_file(ts_file)
         else:
-            self.fp = self._construct_from_data_file(data_file, meta_file)
+            self.fp = self._construct_from_data_file(data_file, meta_file, backref_file)
         self._verify_close = verify_close
         self._metadata = self._metadata or {}
+        self._backref = self._backref or {}
         return self
 
     def __enter__(self):
@@ -430,20 +439,20 @@ class DiskFile(object):
         :returns: a tuple of data, meta and ts (tombstone) files, in one of
                   three states:
 
-                  1. all three are None
+                  1. all four are None
 
                      data directory does not exist, or there are no files in
                      that directory
 
-                  2. ts_file is not None, data_file is None, meta_file is None
+                  2. ts_file is not None, data_file is None, meta_file is None, backref_file is None
 
                      object is considered deleted
 
-                  3. data_file is not None, ts_file is None
+                  3. data_file is not None, ts_file is None, backref_file is not None
 
                      object exists, and optionally has fast-POST metadata
         """
-        data_file = meta_file = ts_file = None
+        data_file = meta_file = ts_file = backref_file = None
         try:
             files = sorted(os.listdir(self.datadir), reverse=True)
         except OSError as err:
@@ -469,14 +478,15 @@ class DiskFile(object):
                     continue
                 if afile.endswith('.data'):
                     data_file = join(self.datadir, afile)
+                    backref_file = join(self.datadir, afile[:-5] + '.backref')
                     break
-        assert ((data_file is None and meta_file is None and ts_file is None)
+        assert ((data_file is None and meta_file is None and ts_file is None and backref_file is None)
                 or (ts_file is not None and data_file is None
-                    and meta_file is None)
-                or (data_file is not None and ts_file is None)), \
-            "On-disk file search algorithm contract is broken: data_file:" \
-            " %s, meta_file: %s, ts_file: %s" % (data_file, meta_file, ts_file)
-        return data_file, meta_file, ts_file
+                    and meta_file is None and backref_file is None)
+                or (data_file is not None and ts_file is None and backref_file is not None)), \
+            "On-disk file search algorithm contract is broken: backref_file: %s, data_file:" \
+            " %s, meta_file: %s, ts_file: %s" % (backref_file, data_file, meta_file, ts_file)
+        return backref_file, data_file, meta_file, ts_file
 
     def _construct_from_ts_file(self, ts_file):
         """
@@ -504,7 +514,7 @@ class DiskFile(object):
                 raise DiskFileCollision('Client path does not match path '
                                         'stored in object metadata')
 
-    def _construct_from_data_file(self, data_file, meta_file):
+    def _construct_from_data_file(self, data_file, meta_file, backref_file):
         """
         Open the data file to fetch its metadata, and fetch the metadata from
         the fast-POST .meta file as well if it exists, merging them properly.
@@ -522,6 +532,9 @@ class DiskFile(object):
             self._metadata.update(sys_metadata)
         else:
             self._metadata = datafile_metadata
+        if backref_file:
+            with open(backref_file, 'rb') as bfp:
+                self._backref = read_backref(bfp)
         self._verify_name()
         self.data_file = data_file
         return fp
@@ -645,6 +658,16 @@ class DiskFile(object):
             raise DiskFileNotOpenError()
         return self._metadata
 
+    def get_backref(self):
+        if self._backref is None:
+            raise DiskFileNotOpenError
+        return self._backref
+
+    def put_backref(self, backref):
+        target_path = join(self.datadir, self.name + '.backref')
+        with open(target_path, 'wb') as f:
+            write_backref(f, backref)
+
     def is_deleted(self):
         """
         Check if the file is deleted.
@@ -654,14 +677,6 @@ class DiskFile(object):
         """
         return not self.data_file or 'deleted' in self._metadata
 
-    def is_expired(self):
-        """
-        Check if the file is expired.
-
-        :returns: True if the file has an X-Delete-At in the past
-        """
-        return ('X-Delete-At' in self._metadata and
-                int(self._metadata['X-Delete-At']) <= time.time())
 
     @contextmanager
     def create(self, size=None):
@@ -703,29 +718,6 @@ class DiskFile(object):
         extension = '.ts' if tombstone else '.meta'
         with self.create() as writer:
             writer.put(metadata, extension=extension)
-
-    def back_reference(self, backpath, uid, metadata = None):
-        if metadata == None:
-            metadata = read_metadata(self.fp)
-        try:
-            if not metadata.has_key('Backrefer-List') or metadata['Backrefer-List'] == None:
-                metadata['Backrefer-List'] = {backpath : uid}
-            else:
-                metadata['Backrefer-List'][backpath] = uid
-            if metadata == None:
-                self.put_metadata(metadata)
-            else:
-                return metadata
-        except KeyError:
-            raise DiskFileBackReferenceError("Back Reference in Metadata is not correct")
-
-    def del_back_reference(self, backpath, uid ):
-        metadata = self.get_metadata()
-        try:
-            metadata['Backrefer-List'].pop(backpath)
-            self.put_metadata(metadata)
-        except KeyError:
-            raise DiskFileBackReferenceError("Back Reference in Metadata is not correct")
 
     def delete(self, timestamp):
         """
