@@ -85,11 +85,13 @@ class ObjectController(object):
         self.threads_per_disk = int(conf.get('threads_per_disk', '0'))
         self.threadpools = defaultdict(
             lambda: ThreadPool(nthreads=self.threads_per_disk))
-        default_allowed_headers = '''
-            content-disposition,
-            content-encoding,
-            x-object-manifest,
-            x-static-large-object,
+        default_allowed_headers = ""
+        comment = '''
+            #should be solved in app layer
+            #content-disposition,
+            #content-encoding,
+            #x-object-manifest,
+            #x-static-large-object,
         '''
         extra_allowed_headers = [
             header.strip().lower() for header in conf.get(
@@ -105,6 +107,8 @@ class ObjectController(object):
             'expiring_objects'
         self.expiring_objects_container_divisor = \
             int(conf.get('expiring_objects_container_divisor') or 86400)
+
+        self.debug = int(conf.get('debug', True))
 
     def _diskfile(self, device, partition, fingerprint, **kwargs):
         """Utility method for instantiating a DiskFile."""
@@ -258,7 +262,12 @@ class ObjectController(object):
                 header_caps = header_key.title()
                 metadata[header_caps] = request.headers[header_key]
         disk_file.put_metadata(metadata)
-        return HTTPAccepted(request=request)
+        if self.debug:
+            resp = HTTPAccepted(request=request)
+            resp.headers["DEBUG"] = str(metadata)
+            return resp
+        else:
+            return HTTPAccepted(request=request)
 
     @public
     @timing_stats()
@@ -296,6 +305,12 @@ class ObjectController(object):
         if orig_timestamp and orig_timestamp >= request.headers['x-timestamp']:
             return HTTPConflict(request=request)
 
+        #check content length
+        orig_content_len = orig_metadata.get('Content-Length')
+        if orig_content_len and int(orig_content_len) != int(request.headers['content-length']):
+            return HTTPUnprocessableEntity(request = request,
+                    body="Wrong Content Length %s vs %s" % (orig_content_len, request.headers['content-length']))
+
         file_exists = self.check_exists(disk_file)
         if not file_exists:
             upload_expiration = time.time() + self.max_upload_time
@@ -328,19 +343,20 @@ class ObjectController(object):
                         return HTTPUnprocessableEntity(request=request)
                     metadata = {
                         'X-Timestamp': request.headers['x-timestamp'],
-                        'Content-Type': request.headers['content-type'],
+                        #'Content-Type': request.headers['content-type'],
                         'ETag': etag,
                         'Content-Length': str(upload_size),
                         'Finger-Print': str(disk_file.fingerprint),
                     }
-#TODO User Meta Should be Writen into Every PUT
-                    metadata.update(val for val in request.headers.iteritems()
-                        if val[0].lower().startswith('x-app-meta-')
-                        and len(val[0]) > 11)
-                    for header_key in self.allowed_headers:
-                        if header_key in request.headers:
-                            header_caps = header_key.title()
-                            metadata[header_caps] = request.headers[header_key]
+                    #Application and Extra System Metadata Should be written by POST
+                    #metadata.update(val for val in request.headers.iteritems()
+                    #    if val[0].lower().startswith('x-app-meta-')
+                    #    and len(val[0]) > 11)
+
+                    #for header_key in self.allowed_headers:
+                    #    if header_key in request.headers:
+                    #        header_caps = header_key.title()
+                    #        metadata[header_caps] = request.headers[header_key]
                     writer.put(metadata)
             except DiskFileNoSpace:
                 return HTTPInsufficientStorage(drive=device, request=request)
@@ -353,7 +369,6 @@ class ObjectController(object):
         disk_file.put_backref(new_backref_map)
         meta_for_update = {
             'x-size': orig_metadata['Content-Length'] if file_exists else metadata['Content-Length'],
-            'x-content-type': orig_metadata['Content-Type'] if file_exists else metadata['Content-Type'],
             'x-etag': orig_metadata['ETag'] if file_exists else metadata['ETag'],
             'x-timestamp': request.headers['x-timestamp'],
             'x-fingerprint': fingerprint
@@ -384,7 +399,6 @@ class ObjectController(object):
         except (DiskFileError, DiskFileNotExist):
             disk_file.quarantine()
             return HTTPNotFound(request=request)
-        import pdb; pdb.set_trace()
         metadata = disk_file.get_metadata()
         if request.headers.get('if-match') not in (None, '*') and \
                 metadata['ETag'] not in request.if_match:
@@ -472,6 +486,9 @@ class ObjectController(object):
         response.content_length = file_size
         if 'Content-Encoding' in metadata:
             response.content_encoding = metadata['Content-Encoding']
+        if self.debug:
+            response.headers['debug'] = metadata
+            return response
         return response
 
     @public
