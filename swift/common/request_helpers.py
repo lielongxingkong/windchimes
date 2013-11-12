@@ -97,10 +97,10 @@ def split_and_validate_fingerprint_path(request, op):
     """
     op_map = {
                 'PUT'    : {'minsegs':5, 'maxsegs':5, 'rest_with_last' : True},
-                'GET'    : {'minsegs':4, 'maxsegs':4, 'rest_with_last' : True},
-                'HEAD'   : {'minsegs':4, 'maxsegs':4, 'rest_with_last' : True},
+                'GET'    : {'minsegs':3, 'maxsegs':4, 'rest_with_last' : True},
+                'HEAD'   : {'minsegs':3, 'maxsegs':4, 'rest_with_last' : True},
                 'DELETE' : {'minsegs':5, 'maxsegs':5, 'rest_with_last' : True},
-                'POST'   : {'minsegs':4, 'maxsegs':4, 'rest_with_last' : True},
+                'POST'   : {'minsegs':3, 'maxsegs':4, 'rest_with_last' : True},
             }
     try:
         segs = split_and_validate_path(request, op_map[op]['minsegs'],  op_map[op]['maxsegs'],  op_map[op]['rest_with_last'])
