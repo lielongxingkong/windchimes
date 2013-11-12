@@ -132,16 +132,16 @@ def hash_cleanup_listdir(hsh_path, reclaim_age=ONE_WEEK):
                 files.remove(files[0])
     elif files:
         files.sort(reverse=True)
-        meta = data = tomb = backref = None
+        meta = data = tomb =  None
         for filename in list(files):
+            if filename.endswith('.backref'):
+                continue
             if not meta and filename.endswith('.meta'):
                 meta = filename
             if not data and filename.endswith('.data'):
                 data = filename
             if not tomb and filename.endswith('.ts'):
                 tomb = filename
-            if not backref and filename.endswith('.backref'):
-                backref = filename
             if (filename < tomb or       # any file older than tomb
                 filename < data or       # any file older than data
                 (filename.endswith('.meta') and
@@ -330,7 +330,7 @@ class DiskWriter(object):
         # other requests to reference.
         renamer(self.tmppath, target_path)
 #TODO how to remove this function?
-        #hash_cleanup_listdir(self.disk_file.datadir)
+        hash_cleanup_listdir(self.disk_file.datadir)
 
     def put(self, metadata, extension='.data'):
         """
@@ -387,6 +387,7 @@ class DiskFile(object):
         self._metadata = None
         self._backref = None
         self.data_file = None
+        self.backref_file = None
         self._data_file_size = None
         self.fp = None
         self.iter_etag = None
@@ -537,6 +538,7 @@ class DiskFile(object):
                 self._backref = read_backref(bfp)
         self._verify_name()
         self.data_file = data_file
+        self.backref_file = backref_file
         return fp
 
     def __iter__(self):
@@ -675,7 +677,7 @@ class DiskFile(object):
         :returns: True if the file doesn't exist or has been flagged as
                   deleted.
         """
-        return not self.data_file or 'deleted' in self._metadata
+        return not (self.data_file and self.backref_file) or 'deleted' in self._metadata
 
 
     @contextmanager
