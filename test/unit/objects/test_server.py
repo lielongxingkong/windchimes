@@ -106,7 +106,7 @@ class TestObjectController(unittest.TestCase):
                             headers={'X-Timestamp': timestamp,
                                      'Content-Type': 'application/x-test'})
         resp = req.get_response(self.object_controller)
-        self.assertEquals(resp.status_int, 204)
+        self.assertEquals(resp.status_int, 202)
 
     def test_POST_update_meta(self):
         # Test swift.obj.server.ObjectController.POST
@@ -362,7 +362,8 @@ class TestObjectController(unittest.TestCase):
     def test_POST_quarantine_zbyte(self):
         # Test swift.obj.server.ObjectController.GET
         timestamp = normalize_timestamp(time())
-        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'PUT'},
                             headers={'X-Timestamp': timestamp,
                                      'Content-Type': 'application/x-test'})
         req.body = 'VERIFY'
@@ -373,15 +374,15 @@ class TestObjectController(unittest.TestCase):
         objfile.open()
 
         file_name = os.path.basename(objfile.data_file)
-        backref_name = os.path.basename(objfile.backref_file)
+        backref_name = os.path.basename(normalize_timestamp(timestamp) + '.backref')
         with open(objfile.data_file) as fp:
             metadata = diskfile.read_metadata(fp)
         os.unlink(objfile.data_file)
         with open(objfile.data_file, 'w') as fp:
             diskfile.write_metadata(fp, metadata)
 
-        self.assertEquals(os.listdir(objfile.datadir)[1], file_name)
-        self.assertEquals(os.listdir(objfile.datadir)[0], backref_name)
+        self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
+        self.assertEquals(os.listdir(objfile.datadir)[1], backref_name)
         req = Request.blank(
             '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
             headers={'X-Timestamp': normalize_timestamp(time())})
@@ -391,8 +392,8 @@ class TestObjectController(unittest.TestCase):
         quar_dir = os.path.join(
             self.testdir, 'sda1', 'quarantined', 'objects',
             os.path.basename(os.path.dirname(objfile.data_file)))
-        self.assertEquals(os.listdir(quar_dir)[1], file_name)
-        self.assertEquals(os.listdir(quar_dir)[0], backref_name)
+        self.assertEquals(os.listdir(quar_dir)[0], file_name)
+        self.assertEquals(os.listdir(quar_dir)[1], backref_name)
 
     def test_PUT_invalid_path(self):
         req = Request.blank('/sda1/p/0b4c2d7e0a73840c1c4f148fda3b0sss/', environ={'REQUEST_METHOD': 'PUT'},
@@ -462,10 +463,9 @@ class TestObjectController(unittest.TestCase):
         objfile = os.path.join(
             self.testdir, 'sda1',
             storage_directory(object_server.DATADIR, 'p1',
-                              '0b4c12d7e0a73840c1c4f148fda3b037'),
-            '0b4c12d7e0a73840c1c4f148fda3b037')
-        data = objfile + ".data"
-        backref = objfile + ".backref"
+                              '0b4c12d7e0a73840c1c4f148fda3b037'))
+        data = objfile + "/0b4c12d7e0a73840c1c4f148fda3b037.data"
+        backref = objfile + '/' + normalize_timestamp(timestamp) + ".backref"
         self.assert_(os.path.isfile(data))
         self.assert_(os.path.isfile(backref))
         self.assertEquals(open(data).read(), 'VERIFY')
@@ -474,10 +474,14 @@ class TestObjectController(unittest.TestCase):
                            'Content-Length': '6',
                            'Finger-Print': '0b4c12d7e0a73840c1c4f148fda3b037',
                            'ETag': '0b4c12d7e0a73840c1c4f148fda3b037',
-        #                   'Content-Type': 'application/octet-stream',
                            'name': '0b4c12d7e0a73840c1c4f148fda3b037'})
         self.assertEquals(diskfile.read_backref(open(backref, 'rb')),
-                          {'Backrefer-List': {'a/c/o' : 'id1'}})
+                {   'Type': 'link',
+                    'Backref':'a/c/o',
+                    'Uid':'id1',
+                    'X-Timestamp':normalize_timestamp(timestamp),
+                    'name':'0b4c12d7e0a73840c1c4f148fda3b037'
+                })
 
 
     def test_PUT_link(self):
@@ -494,10 +498,9 @@ class TestObjectController(unittest.TestCase):
         objfile = os.path.join(
             self.testdir, 'sda1',
             storage_directory(object_server.DATADIR, 'p',
-                              '0b4c12d7e0a73840c1c4f148fda3b037'),
-            '0b4c12d7e0a73840c1c4f148fda3b037' )
-        data = objfile + ".data"
-        backref = objfile + ".backref"
+                              '0b4c12d7e0a73840c1c4f148fda3b037') )
+        data = objfile + "/0b4c12d7e0a73840c1c4f148fda3b037.data"
+        backref = objfile + '/'+ normalize_timestamp(timestamp1) + ".backref"
         self.assert_(os.path.isfile(data))
         self.assert_(os.path.isfile(backref))
         self.assertEquals(open(data).read(), 'VERIFY')
@@ -511,7 +514,12 @@ class TestObjectController(unittest.TestCase):
         #                   'Content-Encoding': 'gzip'
                            })
         self.assertEquals(diskfile.read_backref(open(backref,'rb')),
-                          {'Backrefer-List': {'a/c/o': 'id2'}})
+                {   'Type': 'link',
+                    'Backref':'a/c/o',
+                    'Uid':'id2',
+                    'X-Timestamp':normalize_timestamp(timestamp1),
+                    'name':'0b4c12d7e0a73840c1c4f148fda3b037'
+                })
         sleep(.00001)
         timestamp2 = normalize_timestamp(time())
         req = Request.blank(
@@ -525,10 +533,9 @@ class TestObjectController(unittest.TestCase):
         objfile = os.path.join(
             self.testdir, 'sda1',
             storage_directory(object_server.DATADIR, 'p',
-                              '0b4c12d7e0a73840c1c4f148fda3b037'),
-            '0b4c12d7e0a73840c1c4f148fda3b037')
-        data = objfile + ".data"
-        backref = objfile + ".backref"
+                              '0b4c12d7e0a73840c1c4f148fda3b037') )
+        data = objfile + "/0b4c12d7e0a73840c1c4f148fda3b037.data"
+        backref = objfile + '/'+ normalize_timestamp(timestamp2) + ".backref"
         self.assert_(os.path.isfile(data))
         self.assert_(os.path.isfile(backref))
         self.assertEquals(open(data).read(), 'VERIFY')
@@ -542,7 +549,55 @@ class TestObjectController(unittest.TestCase):
         #                   'Content-Encoding': 'gzip'
                            })
         self.assertEquals(diskfile.read_backref(open(backref, 'rb')),
-                          {'Backrefer-List': {'a/c/o': 'id2', 'b/c/o' : 'id3'}})
+                {   'Type': 'link',
+                    'Backref':'b/c/o',
+                    'Uid':'id3',
+                    'X-Timestamp':normalize_timestamp(timestamp2),
+                    'name':'0b4c12d7e0a73840c1c4f148fda3b037'
+                })
+
+        sleep(.00001)
+        timestamp3 = normalize_timestamp(time())
+        req = Request.blank(
+            '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id4/k/c/o', environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': timestamp3,
+                     'Content-Type': 'text/plain',
+                     'Content-Encoding': 'gzip'})
+        req.body = 'VERIFY'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
+        objfile = os.path.join(
+            self.testdir, 'sda1',
+            storage_directory(object_server.DATADIR, 'p',
+                              '0b4c12d7e0a73840c1c4f148fda3b037') )
+        data = objfile + "/0b4c12d7e0a73840c1c4f148fda3b037.data"
+        backref1 = objfile + '/'+ normalize_timestamp(timestamp2) + ".backref"
+        backref2 = objfile + '/'+ normalize_timestamp(timestamp3) + ".backref"
+        self.assert_(os.path.isfile(data))
+        self.assert_(os.path.isfile(backref1))
+        self.assert_(os.path.isfile(backref2))
+        self.assertEquals(open(data).read(), 'VERIFY')
+        self.assertEquals(diskfile.read_metadata(data),
+                          {'X-Timestamp': timestamp1,
+                           'Content-Length': '6',
+                           'ETag': '0b4c12d7e0a73840c1c4f148fda3b037',
+                           'Finger-Print': '0b4c12d7e0a73840c1c4f148fda3b037',
+                           'name': '0b4c12d7e0a73840c1c4f148fda3b037',
+                           })
+        self.assertEquals(diskfile.read_backref(open(backref1, 'rb')),
+                {   'Type': 'link',
+                    'Backref':'b/c/o',
+                    'Uid':'id3',
+                    'X-Timestamp':normalize_timestamp(timestamp2),
+                    'name':'0b4c12d7e0a73840c1c4f148fda3b037'
+                })
+        self.assertEquals(diskfile.read_backref(open(backref2, 'rb')),
+                {   'Type': 'link',
+                    'Backref':'k/c/o',
+                    'Uid':'id4',
+                    'X-Timestamp':normalize_timestamp(timestamp3),
+                    'name':'0b4c12d7e0a73840c1c4f148fda3b037'
+                })
 
     def test_PUT_old_timestamp(self):
         ts = time()
@@ -590,41 +645,6 @@ class TestObjectController(unittest.TestCase):
         req.body = 'test'
         resp = req.get_response(self.object_controller)
         self.assertEquals(resp.status_int, 422)
-
-    def test_PUT_user_metadata(self):
-        timestamp = normalize_timestamp(time())
-        req = Request.blank(
-            '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-            headers={'X-Timestamp': timestamp,
-                     'Content-Type': 'text/plain',
-                     'ETag': 'b114ab7b90d9ccac4bd5d99cc7ebb568',
-                     'X-App-Meta-1': 'One',
-                     'X-App-Meta-Two': 'Two'})
-        req.body = 'VERIFY THREE'
-        resp = req.get_response(self.object_controller)
-        self.assertEquals(resp.status_int, 201)
-        objfile = os.path.join(
-            self.testdir, 'sda1',
-            storage_directory(object_server.DATADIR, 'p',
-                              '0b4c12d7e0a73840c1c4f148fda3b037'),
-            '0b4c12d7e0a73840c1c4f148fda3b037')
-        data = objfile + '.data'
-        backref = objfile + '.backref'
-        self.assert_(os.path.isfile(data))
-        self.assert_(os.path.isfile(backref))
-        self.assertEquals(open(data).read(), 'VERIFY THREE')
-        self.assertEquals(diskfile.read_metadata(data),
-                          {'X-Timestamp': timestamp,
-                           'Content-Length': '12',
-                           'ETag': 'b114ab7b90d9ccac4bd5d99cc7ebb568',
-        #                   'Content-Type': 'text/plain',
-                           'name': '0b4c12d7e0a73840c1c4f148fda3b037',
-                           'Finger-Print': '0b4c12d7e0a73840c1c4f148fda3b037',
-        #                   'X-App-Meta-1': 'One',
-        #                   'X-App-Meta-Two': 'Two'
-                           })
-        self.assertEquals(diskfile.read_backref(open(backref,'rb')),
-                {'Backrefer-List': {'a/c/o': 'id'}})
 
     def test_PUT_application_connection(self):
 
@@ -743,13 +763,117 @@ class TestObjectController(unittest.TestCase):
         resp = req.get_response(self.object_controller)
         self.assertEquals(resp.status_int, 404)
 
-        sleep(.00001)
+    def test_HEAD_quarantine_zbyte(self):
+        # Test swift.obj.server.ObjectController.GET
         timestamp = normalize_timestamp(time())
         req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                            headers={'X-Timestamp': timestamp,
+                                     'Content-Type': 'application/x-test'})
+        req.body = 'VERIFY'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
+        objfile = diskfile.DiskFile(self.testdir, 'sda1', 'p', '0b4c12d7e0a73840c1c4f148fda3b037',
+                                    FakeLogger())
+        objfile.open()
+
+        file_name = os.path.basename(objfile.data_file)
+        with open(objfile.data_file) as fp:
+            metadata = diskfile.read_metadata(fp)
+        os.unlink(objfile.data_file)
+        with open(objfile.data_file, 'w') as fp:
+            diskfile.write_metadata(fp, metadata)
+
+        self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'HEAD'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 404)
+
+        quar_dir = os.path.join(
+            self.testdir, 'sda1', 'quarantined', 'objects',
+            os.path.basename(os.path.dirname(objfile.data_file)))
+        self.assertEquals(os.listdir(quar_dir)[0], file_name)
+
+    def test_GET(self):
+        # Test swift.obj.server.ObjectController.GET
+        req = Request.blank('/sda1/p/a/c', environ={'REQUEST_METHOD': 'GET'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 400)
+
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'GET'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 404)
+
+        timestamp = normalize_timestamp(time())
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'PUT'},
+                            headers={'X-Timestamp': timestamp,
+                                     'Content-Type': 'application/x-test',
+                                     'X-App-Meta-1': 'One',
+                                     'X-App-Meta-Two': 'Two'})
+        req.body = 'VERIFY'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
+
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'GET'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(resp.body, 'VERIFY')
+        self.assertEquals(resp.content_length, 6)
+        self.assertEquals(resp.headers['content-length'], '6')
+        self.assertEquals(
+            resp.headers['last-modified'],
+            strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(float(timestamp))))
+        self.assertEquals(resp.headers['etag'],
+                          '"0b4c12d7e0a73840c1c4f148fda3b037"')
+        #self.assertEquals(resp.headers['x-app-meta-1'], 'One')
+        #self.assertEquals(resp.headers['x-app-meta-two'], 'Two')
+
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'GET'})
+        req.range = 'bytes=1-3'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 206)
+        self.assertEquals(resp.body, 'ERI')
+        self.assertEquals(resp.headers['content-length'], '3')
+
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'GET'})
+        req.range = 'bytes=1-'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 206)
+        self.assertEquals(resp.body, 'ERIFY')
+        self.assertEquals(resp.headers['content-length'], '5')
+
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'GET'})
+        req.range = 'bytes=-2'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 206)
+        self.assertEquals(resp.body, 'FY')
+        self.assertEquals(resp.headers['content-length'], '2')
+
+        objfile = os.path.join(
+            self.testdir, 'sda1',
+            storage_directory(object_server.DATADIR, 'p',
+                              '0b4c12d7e0a73840c1c4f148fda3b037'),
+            '0b4c12d7e0a73840c1c4f148fda3b037.data')
+        os.unlink(objfile)
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'GET'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 404)
+
+        sleep(.00001)
+        timestamp = normalize_timestamp(time())
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'PUT'},
                             headers={
                                 'X-Timestamp': timestamp,
-                                'Content-Type': 'application/octet-stream',
-                                'Content-length': '6'})
+                                'Content-Type': 'application:octet-stream',
+                                'Content-Length': '6'})
         req.body = 'VERIFY'
         resp = req.get_response(self.object_controller)
         self.assertEquals(resp.status_int, 201)
@@ -760,614 +884,496 @@ class TestObjectController(unittest.TestCase):
                             environ={'REQUEST_METHOD': 'DELETE'},
                             headers={'X-Timestamp': timestamp})
         resp = req.get_response(self.object_controller)
-        self.assertEquals(resp.status_int, 204)
+        self.assertEquals(resp.status_int, 202)
 
         req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-                            environ={'REQUEST_METHOD': 'HEAD'})
+                            environ={'REQUEST_METHOD': 'GET'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
+
+    def test_GET_if_match(self):
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                            headers={
+                                'X-Timestamp': normalize_timestamp(time()),
+                                'Content-Type': 'application/octet-stream',
+                                'Content-Length': '4'})
+        req.body = 'test'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
+        etag = resp.etag
+
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(resp.etag, etag)
+
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+                            headers={'If-Match': '*'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(resp.etag, etag)
+
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fd43b037/id/a/c/o2',
+                            environ={'REQUEST_METHOD': 'GET'},
+                            headers={'If-Match': '*'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 412)
+
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+                            headers={'If-Match': '"%s"' % etag})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(resp.etag, etag)
+
+        req = Request.blank(
+            '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+            headers={'If-Match': '"11111111111111111111111111111111"'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 412)
+
+        req = Request.blank(
+            '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+            headers={
+                'If-Match': '"11111111111111111111111111111111", "%s"' % etag})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
+
+        req = Request.blank(
+            '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+            headers={
+                'If-Match':
+                '"11111111111111111111111111111111", '
+                '"22222222222222222222222222222222"'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 412)
+
+    def test_GET_if_none_match(self):
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'PUT'},
+                            headers={
+                                'X-Timestamp': normalize_timestamp(time()),
+                                'Content-Type': 'application/octet-stream',
+                                'Content-Length': '4'})
+        req.body = 'test'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
+        etag = resp.etag
+
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'GET'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(resp.etag, etag)
+
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'GET'},
+                            headers={'If-None-Match': '*'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 304)
+        self.assertEquals(resp.etag, etag)
+
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148f5a3b037/id/a/c/o2',
+                            environ={'REQUEST_METHOD': 'GET'},
+                            headers={'If-None-Match': '*'})
         resp = req.get_response(self.object_controller)
         self.assertEquals(resp.status_int, 404)
 
-    #def test_HEAD_quarantine_zbyte(self):
-        ## Test swift.obj.server.ObjectController.GET
-        #timestamp = normalize_timestamp(time())
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-                            #headers={'X-Timestamp': timestamp,
-                                     #'Content-Type': 'application/x-test'})
-        #req.body = 'VERIFY'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
-        #objfile = diskfile.DiskFile(self.testdir, 'sda1', 'p', 'a', 'c', 'o',
-                                    #FakeLogger())
-        #objfile.open()
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'GET'},
+                            headers={'If-None-Match': '"%s"' % etag})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 304)
+        self.assertEquals(resp.etag, etag)
 
-        #file_name = os.path.basename(objfile.data_file)
-        #with open(objfile.data_file) as fp:
-            #metadata = diskfile.read_metadata(fp)
-        #os.unlink(objfile.data_file)
-        #with open(objfile.data_file, 'w') as fp:
-            #diskfile.write_metadata(fp, metadata)
+        req = Request.blank(
+            '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'GET'},
+                            headers={'If-None-Match': '"11111111111111111111111111111111"'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(resp.etag, etag)
 
-        #self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-                            #environ={'REQUEST_METHOD': 'HEAD'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 404)
+        req = Request.blank(
+            '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+            headers={'If-None-Match':
+                     '"11111111111111111111111111111111", '
+                     '"%s"' % etag})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 304)
+        self.assertEquals(resp.etag, etag)
 
-        #quar_dir = os.path.join(
-            #self.testdir, 'sda1', 'quarantined', 'objects',
-            #os.path.basename(os.path.dirname(objfile.data_file)))
-        #self.assertEquals(os.listdir(quar_dir)[0], file_name)
+    def test_GET_if_modified_since(self):
+        timestamp = normalize_timestamp(time())
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                            headers={
+                                'X-Timestamp': timestamp,
+                                'Content-Type': 'application/octet-stream',
+                                'Content-Length': '4'})
+        req.body = 'test'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
 
-  #  def test_GET(self):
-        ## Test swift.obj.server.ObjectController.GET
-        #req = Request.blank('/sda1/p/a/c', environ={'REQUEST_METHOD': 'GET'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 400)
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 404)
+        since = strftime('%a, %d %b %Y %H:%M:%S GMT',
+                         gmtime(float(timestamp) + 1))
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+                            headers={'If-Modified-Since': since})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 304)
 
-        #timestamp = normalize_timestamp(time())
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-                            #headers={'X-Timestamp': timestamp,
-                                     #'Content-Type': 'application/x-test',
-                                     #'X-App-Meta-1': 'One',
-                                     #'X-App-Meta-Two': 'Two'})
-        #req.body = 'VERIFY'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
+        since = \
+            strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(float(timestamp) - 1))
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+                            headers={'If-Modified-Since': since})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-        #self.assertEquals(resp.body, 'VERIFY')
-        #self.assertEquals(resp.content_length, 6)
-        #self.assertEquals(resp.content_type, 'application/x-test')
-        #self.assertEquals(resp.headers['content-length'], '6')
-        #self.assertEquals(resp.headers['content-type'], 'application/x-test')
-        #self.assertEquals(
-            #resp.headers['last-modified'],
-            #strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(float(timestamp))))
-        #self.assertEquals(resp.headers['etag'],
-                          #'"0b4c12d7e0a73840c1c4f148fda3b037"')
-        #self.assertEquals(resp.headers['x-object-meta-1'], 'One')
-        #self.assertEquals(resp.headers['x-object-meta-two'], 'Two')
+        since = \
+            strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(float(timestamp) + 1))
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+                            headers={'If-Modified-Since': since})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 304)
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
-        #req.range = 'bytes=1-3'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 206)
-        #self.assertEquals(resp.body, 'ERI')
-        #self.assertEquals(resp.headers['content-length'], '3')
+    def test_GET_if_unmodified_since(self):
+        timestamp = normalize_timestamp(time())
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                            headers={
+                                'X-Timestamp': timestamp,
+                                'Content-Type': 'application/octet-stream',
+                                'Content-Length': '4'})
+        req.body = 'test'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
-        #req.range = 'bytes=1-'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 206)
-        #self.assertEquals(resp.body, 'ERIFY')
-        #self.assertEquals(resp.headers['content-length'], '5')
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
-        #req.range = 'bytes=-2'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 206)
-        #self.assertEquals(resp.body, 'FY')
-        #self.assertEquals(resp.headers['content-length'], '2')
+        since = strftime('%a, %d %b %Y %H:%M:%S GMT',
+                         gmtime(float(timestamp) + 1))
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+                            headers={'If-Unmodified-Since': since})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
 
-        #objfile = os.path.join(
-            #self.testdir, 'sda1',
-            #storage_directory(object_server.DATADIR, 'p',
-                              #hash_path('a', 'c', 'o')),
-            #timestamp + '.data')
-        #os.unlink(objfile)
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 404)
+        since = \
+            strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(float(timestamp) - 9))
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+                            headers={'If-Unmodified-Since': since})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 412)
 
-        #sleep(.00001)
-        #timestamp = normalize_timestamp(time())
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-                            #headers={
-                                #'X-Timestamp': timestamp,
-                                #'Content-Type': 'application:octet-stream',
-                                #'Content-Length': '6'})
-        #req.body = 'VERIFY'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
+        since = \
+            strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(float(timestamp) + 9))
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+                            headers={'If-Unmodified-Since': since})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
 
-        #sleep(.00001)
-        #timestamp = normalize_timestamp(time())
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-                            #environ={'REQUEST_METHOD': 'DELETE'},
-                            #headers={'X-Timestamp': timestamp})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 204)
+    def test_GET_quarantine(self):
+        # Test swift.obj.server.ObjectController.GET
+        timestamp = normalize_timestamp(time())
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                            headers={'X-Timestamp': timestamp,
+                                     'Content-Type': 'application/x-test'})
+        req.body = 'VERIFY'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
+        objfile = diskfile.DiskFile(self.testdir, 'sda1', 'p', '0b4c12d7e0a73840c1c4f148fda3b037',
+                                    FakeLogger())
+        objfile.open()
+        file_name = os.path.basename(objfile.data_file)
+        etag = md5()
+        etag.update('VERIF')
+        etag = etag.hexdigest()
+        metadata = {'X-Timestamp': timestamp,
+                    'Content-Length': 6, 'ETag': etag}
+        diskfile.write_metadata(objfile.fp, metadata)
+        self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
+        resp = req.get_response(self.object_controller)
+        quar_dir = os.path.join(
+            self.testdir, 'sda1', 'quarantined', 'objects',
+            os.path.basename(os.path.dirname(objfile.data_file)))
+        self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
+        body = resp.body  # actually does quarantining
+        self.assertEquals(body, 'VERIFY')
+        self.assertEquals(os.listdir(quar_dir)[0], file_name)
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 404)
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 404)
+    def test_GET_quarantine_zbyte(self):
+        # Test swift.obj.server.ObjectController.GET
+        timestamp = normalize_timestamp(time())
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                            headers={'X-Timestamp': timestamp,
+                                     'Content-Type': 'application/x-test'})
+        req.body = 'VERIFY'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
+        objfile = diskfile.DiskFile(self.testdir, 'sda1', 'p', '0b4c12d7e0a73840c1c4f148fda3b037',
+                                    FakeLogger())
+        objfile.open()
+        file_name = os.path.basename(objfile.data_file)
+        with open(objfile.data_file) as fp:
+            metadata = diskfile.read_metadata(fp)
+        os.unlink(objfile.data_file)
+        with open(objfile.data_file, 'w') as fp:
+            diskfile.write_metadata(fp, metadata)
 
-    #def test_GET_if_match(self):
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-                            #headers={
-                                #'X-Timestamp': normalize_timestamp(time()),
-                                #'Content-Type': 'application/octet-stream',
-                                #'Content-Length': '4'})
-        #req.body = 'test'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
-        #etag = resp.etag
+        self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 404)
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-        #self.assertEquals(resp.etag, etag)
+        quar_dir = os.path.join(
+            self.testdir, 'sda1', 'quarantined', 'objects',
+            os.path.basename(os.path.dirname(objfile.data_file)))
+        self.assertEquals(os.listdir(quar_dir)[0], file_name)
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-                            #headers={'If-Match': '*'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-        #self.assertEquals(resp.etag, etag)
+    def test_GET_quarantine_range(self):
+        # Test swift.obj.server.ObjectController.GET
+        timestamp = normalize_timestamp(time())
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'PUT'},
+                            headers={'X-Timestamp': timestamp,
+                                     'Content-Type': 'application/x-test'})
+        req.body = 'VERIFY'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
+        objfile = diskfile.DiskFile(self.testdir, 'sda1', 'p', '0b4c12d7e0a73840c1c4f148fda3b037',
+                                    FakeLogger())
+        objfile.open()
+        file_name = os.path.basename(objfile.data_file)
+        etag = md5()
+        etag.update('VERIF')
+        etag = etag.hexdigest()
+        metadata = {'X-Timestamp': timestamp,
+                    'Content-Length': 6, 'ETag': etag}
+        diskfile.write_metadata(objfile.fp, metadata)
+        self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
+        req.range = 'bytes=0-4'  # partial
+        resp = req.get_response(self.object_controller)
+        quar_dir = os.path.join(
+            self.testdir, 'sda1', 'quarantined', 'objects',
+            os.path.basename(os.path.dirname(objfile.data_file)))
+        resp.body
+        self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
+        self.assertFalse(os.path.isdir(quar_dir))
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o2',
-                            #environ={'REQUEST_METHOD': 'GET'},
-                            #headers={'If-Match': '*'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 412)
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
+        req.range = 'bytes=1-6'  # partial
+        resp = req.get_response(self.object_controller)
+        quar_dir = os.path.join(
+            self.testdir, 'sda1', 'quarantined', 'objects',
+            os.path.basename(os.path.dirname(objfile.data_file)))
+        resp.body
+        self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
+        self.assertFalse(os.path.isdir(quar_dir))
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-                            #headers={'If-Match': '"%s"' % etag})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-        #self.assertEquals(resp.etag, etag)
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
+        req.range = 'bytes=0-14'  # full
+        resp = req.get_response(self.object_controller)
+        quar_dir = os.path.join(
+            self.testdir, 'sda1', 'quarantined', 'objects',
+            os.path.basename(os.path.dirname(objfile.data_file)))
+        self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
+        resp.body
+        self.assertTrue(os.path.isdir(quar_dir))
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 404)
 
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-            #headers={'If-Match': '"11111111111111111111111111111111"'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 412)
+    def test_DELETE(self):
+        # Test swift.obj.server.ObjectController.DELETE
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/c',
+                            environ={'REQUEST_METHOD': 'DELETE'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 400)
 
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-            #headers={
-                #'If-Match': '"11111111111111111111111111111111", "%s"' % etag})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'DELETE'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 400)
+        #self.assertRaises(KeyError, self.object_controller.DELETE, req)
 
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-            #headers={
-                #'If-Match':
-                #'"11111111111111111111111111111111", '
-                #'"22222222222222222222222222222222"'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 412)
+        # The following should have created a tombstone file
+        timestamp = normalize_timestamp(time())
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'DELETE'},
+                            headers={'X-Timestamp': timestamp})
+        resp = req.get_response(self.object_controller)
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 404)
+        objfile = os.path.join(
+            self.testdir, 'sda1',
+            storage_directory(object_server.DATADIR, 'p',
+                              "0b4c12d7e0a73840c1c4f148fda3b037"),
+            timestamp + '.backref')
+        self.assert_(not os.path.isfile(objfile))
 
-    #def test_GET_if_none_match(self):
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-                            #headers={
-                                #'X-Timestamp': normalize_timestamp(time()),
-                                #'Content-Type': 'application/octet-stream',
-                                #'Content-Length': '4'})
-        #req.body = 'test'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
-        #etag = resp.etag
+        # The following should *not* have created a tombstone file.
+        timestamp = normalize_timestamp(float(timestamp) - 1)
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'DELETE'},
+                            headers={'X-Timestamp': timestamp})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 404)
+        objfile = os.path.join(
+            self.testdir, 'sda1',
+            storage_directory(object_server.DATADIR, 'p',
+                              '0b4c12d7e0a73840c1c4f148fda3b037'),
+            timestamp + '.backref')
+        self.assertFalse(os.path.isfile(objfile))
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-        #self.assertEquals(resp.etag, etag)
+        sleep(.00001)
+        timestamp = normalize_timestamp(time())
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'PUT'},
+                            headers={
+                                'X-Timestamp': timestamp,
+                                'Content-Type': 'application/octet-stream',
+                                'Content-Length': '4',
+                            })
+        req.body = 'test'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-                            #headers={'If-None-Match': '*'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 304)
-        #self.assertEquals(resp.etag, etag)
+        # The following should *not* have created a tombstone file.
+        timestamp = normalize_timestamp(float(timestamp) - 1)
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'DELETE'},
+                            headers={'X-Timestamp': timestamp})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 409)
+        objfile = os.path.join(
+            self.testdir, 'sda1',
+            storage_directory(object_server.DATADIR, 'p',
+                              '0b4c12d7e0a73840c1c4f148fda3b037'),
+            timestamp + '.backref')
+        self.assertFalse(os.path.isfile(objfile))
+        self.assertEquals(len(os.listdir(os.path.dirname(objfile))), 2)
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o2',
-                            #environ={'REQUEST_METHOD': 'GET'},
-                            #headers={'If-None-Match': '*'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 404)
+        sleep(.00001)
+        timestamp = normalize_timestamp(time())
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'DELETE'},
+                            headers={'X-Timestamp': timestamp})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 202)
+        objfile = os.path.join(
+            self.testdir, 'sda1',
+            storage_directory(object_server.DATADIR, 'p',
+                              '0b4c12d7e0a73840c1c4f148fda3b037'),
+            timestamp + '.backref')
+        self.assert_(os.path.isfile(objfile))
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-                            #headers={'If-None-Match': '"%s"' % etag})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 304)
-        #self.assertEquals(resp.etag, etag)
+    def test_DELETE_container_updates(self):
+        # Test swift.obj.server.ObjectController.DELETE and container
+        # updates, making sure container update is called in the correct
+        # state.
+        timestamp = normalize_timestamp(time())
+        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                            environ={'REQUEST_METHOD': 'PUT'},
+                            headers={
+                                'X-Timestamp': timestamp,
+                                'Content-Type': 'application/octet-stream',
+                                'Content-Length': '4',
+                            })
+        req.body = 'test'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
 
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-            #headers={'If-None-Match': '"11111111111111111111111111111111"'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-        #self.assertEquals(resp.etag, etag)
+        calls_made = [0]
 
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-            #headers={'If-None-Match':
-                     #'"11111111111111111111111111111111", '
-                     #'"%s"' % etag})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 304)
-        #self.assertEquals(resp.etag, etag)
+        def our_container_update(*args, **kwargs):
+            calls_made[0] += 1
 
-    #def test_GET_if_modified_since(self):
-        #timestamp = normalize_timestamp(time())
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-                            #headers={
-                                #'X-Timestamp': timestamp,
-                                #'Content-Type': 'application/octet-stream',
-                                #'Content-Length': '4'})
-        #req.body = 'test'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
+        orig_cu = self.object_controller.application_async_update
+        self.object_controller.container_update = our_container_update
+        try:
+            # The following request should return 409 (HTTP Conflict). A
+            # tombstone file should not have been created with this timestamp.
+            timestamp = normalize_timestamp(float(timestamp) - 1)
+            req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                                environ={'REQUEST_METHOD': 'DELETE'},
+                                headers={'X-Timestamp': timestamp})
+            resp = req.get_response(self.object_controller)
+            self.assertEquals(resp.status_int, 409)
+            objfile = os.path.join(
+                self.testdir, 'sda1',
+                storage_directory(object_server.DATADIR, 'p',
+                                  '0b4c12d7e0a73840c1c4f148fda3b037'),
+                timestamp + '.backref')
+            self.assertFalse(os.path.isfile(objfile))
+            self.assertEquals(len(os.listdir(os.path.dirname(objfile))), 2)
 
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
+            # The following request should return 204, and the object should
+            # be truly deleted (container update is performed) because this
+            # timestamp is newer. A tombstone file should have been created
+            # with this timestamp.
+            sleep(.00001)
+            timestamp = normalize_timestamp(time())
+            req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                                environ={'REQUEST_METHOD': 'DELETE'},
+                                headers={'X-Timestamp': timestamp})
+            resp = req.get_response(self.object_controller)
+            self.assertEquals(resp.status_int, 202)
+            objfile = os.path.join(
+                self.testdir, 'sda1',
+                storage_directory(object_server.DATADIR, 'p',
+                                  '0b4c12d7e0a73840c1c4f148fda3b037'),
+                timestamp + '.backref')
+            self.assert_(os.path.isfile(objfile))
+            self.assertEquals(len(os.listdir(os.path.dirname(objfile))), 3)
 
-        #since = strftime('%a, %d %b %Y %H:%M:%S GMT',
-                         #gmtime(float(timestamp) + 1))
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-                            #headers={'If-Modified-Since': since})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 304)
+            # The following request should return a 404, as the object should
+            # already have been deleted, but it should have also performed a
+            # container update because the timestamp is newer, and a tombstone
+            # file should also exist with this timestamp.
+            sleep(.00001)
+            timestamp = normalize_timestamp(time())
+            req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                                environ={'REQUEST_METHOD': 'DELETE'},
+                                headers={'X-Timestamp': timestamp})
+            resp = req.get_response(self.object_controller)
+            self.assertEquals(resp.status_int, 202)
+            objfile = os.path.join(
+                self.testdir, 'sda1',
+                storage_directory(object_server.DATADIR, 'p',
+                                  '0b4c12d7e0a73840c1c4f148fda3b037'),
+                timestamp + '.backref')
+            self.assert_(os.path.isfile(objfile))
+            self.assertEquals(len(os.listdir(os.path.dirname(objfile))), 4)
 
-        #since = \
-            #strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(float(timestamp) - 1))
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-                            #headers={'If-Modified-Since': since})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-
-        #since = \
-            #strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(float(timestamp) + 1))
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-                            #headers={'If-Modified-Since': since})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 304)
-
-    #def test_GET_if_unmodified_since(self):
-        #timestamp = normalize_timestamp(time())
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-                            #headers={
-                                #'X-Timestamp': timestamp,
-                                #'Content-Type': 'application/octet-stream',
-                                #'Content-Length': '4'})
-        #req.body = 'test'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
-
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-
-        #since = strftime('%a, %d %b %Y %H:%M:%S GMT',
-                         #gmtime(float(timestamp) + 1))
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-                            #headers={'If-Unmodified-Since': since})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-
-        #since = \
-            #strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(float(timestamp) - 9))
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-                            #headers={'If-Unmodified-Since': since})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 412)
-
-        #since = \
-            #strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(float(timestamp) + 9))
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-                            #headers={'If-Unmodified-Since': since})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-
-    #def test_GET_quarantine(self):
-        ## Test swift.obj.server.ObjectController.GET
-        #timestamp = normalize_timestamp(time())
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-                            #headers={'X-Timestamp': timestamp,
-                                     #'Content-Type': 'application/x-test'})
-        #req.body = 'VERIFY'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
-        #objfile = diskfile.DiskFile(self.testdir, 'sda1', 'p', 'a', 'c', 'o',
-                                    #FakeLogger())
-        #objfile.open()
-        #file_name = os.path.basename(objfile.data_file)
-        #etag = md5()
-        #etag.update('VERIF')
-        #etag = etag.hexdigest()
-        #metadata = {'X-Timestamp': timestamp,
-                    #'Content-Length': 6, 'ETag': etag}
-        #diskfile.write_metadata(objfile.fp, metadata)
-        #self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
-        #resp = req.get_response(self.object_controller)
-        #quar_dir = os.path.join(
-            #self.testdir, 'sda1', 'quarantined', 'objects',
-            #os.path.basename(os.path.dirname(objfile.data_file)))
-        #self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
-        #body = resp.body  # actually does quarantining
-        #self.assertEquals(body, 'VERIFY')
-        #self.assertEquals(os.listdir(quar_dir)[0], file_name)
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 404)
-
-    #def test_GET_quarantine_zbyte(self):
-        ## Test swift.obj.server.ObjectController.GET
-        #timestamp = normalize_timestamp(time())
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-                            #headers={'X-Timestamp': timestamp,
-                                     #'Content-Type': 'application/x-test'})
-        #req.body = 'VERIFY'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
-        #objfile = diskfile.DiskFile(self.testdir, 'sda1', 'p', 'a', 'c', 'o',
-                                    #FakeLogger())
-        #objfile.open()
-        #file_name = os.path.basename(objfile.data_file)
-        #with open(objfile.data_file) as fp:
-            #metadata = diskfile.read_metadata(fp)
-        #os.unlink(objfile.data_file)
-        #with open(objfile.data_file, 'w') as fp:
-            #diskfile.write_metadata(fp, metadata)
-
-        #self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 404)
-
-        #quar_dir = os.path.join(
-            #self.testdir, 'sda1', 'quarantined', 'objects',
-            #os.path.basename(os.path.dirname(objfile.data_file)))
-        #self.assertEquals(os.listdir(quar_dir)[0], file_name)
-
-    #def test_GET_quarantine_range(self):
-        ## Test swift.obj.server.ObjectController.GET
-        #timestamp = normalize_timestamp(time())
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-                            #headers={'X-Timestamp': timestamp,
-                                     #'Content-Type': 'application/x-test'})
-        #req.body = 'VERIFY'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
-        #objfile = diskfile.DiskFile(self.testdir, 'sda1', 'p', 'a', 'c', 'o',
-                                    #FakeLogger())
-        #objfile.open()
-        #file_name = os.path.basename(objfile.data_file)
-        #etag = md5()
-        #etag.update('VERIF')
-        #etag = etag.hexdigest()
-        #metadata = {'X-Timestamp': timestamp,
-                    #'Content-Length': 6, 'ETag': etag}
-        #diskfile.write_metadata(objfile.fp, metadata)
-        #self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
-        #req.range = 'bytes=0-4'  # partial
-        #resp = req.get_response(self.object_controller)
-        #quar_dir = os.path.join(
-            #self.testdir, 'sda1', 'quarantined', 'objects',
-            #os.path.basename(os.path.dirname(objfile.data_file)))
-        #resp.body
-        #self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
-        #self.assertFalse(os.path.isdir(quar_dir))
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
-        #req.range = 'bytes=1-6'  # partial
-        #resp = req.get_response(self.object_controller)
-        #quar_dir = os.path.join(
-            #self.testdir, 'sda1', 'quarantined', 'objects',
-            #os.path.basename(os.path.dirname(objfile.data_file)))
-        #resp.body
-        #self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
-        #self.assertFalse(os.path.isdir(quar_dir))
-
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
-        #req.range = 'bytes=0-14'  # full
-        #resp = req.get_response(self.object_controller)
-        #quar_dir = os.path.join(
-            #self.testdir, 'sda1', 'quarantined', 'objects',
-            #os.path.basename(os.path.dirname(objfile.data_file)))
-        #self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
-        #resp.body
-        #self.assertTrue(os.path.isdir(quar_dir))
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 404)
-
-    #def test_DELETE(self):
-        ## Test swift.obj.server.ObjectController.DELETE
-        #req = Request.blank('/sda1/p/a/c',
-                            #environ={'REQUEST_METHOD': 'DELETE'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 400)
-
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-                            #environ={'REQUEST_METHOD': 'DELETE'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 400)
-        ## self.assertRaises(KeyError, self.object_controller.DELETE, req)
-
-        ## The following should have created a tombstone file
-        #timestamp = normalize_timestamp(time())
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-                            #environ={'REQUEST_METHOD': 'DELETE'},
-                            #headers={'X-Timestamp': timestamp})
-        #resp = req.get_response(self.object_controller)
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 404)
-        #objfile = os.path.join(
-            #self.testdir, 'sda1',
-            #storage_directory(object_server.DATADIR, 'p',
-                              #hash_path('a', 'c', 'o')),
-            #timestamp + '.ts')
-        #self.assert_(os.path.isfile(objfile))
-
-        ## The following should *not* have created a tombstone file.
-        #timestamp = normalize_timestamp(float(timestamp) - 1)
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-                            #environ={'REQUEST_METHOD': 'DELETE'},
-                            #headers={'X-Timestamp': timestamp})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 404)
-        #objfile = os.path.join(
-            #self.testdir, 'sda1',
-            #storage_directory(object_server.DATADIR, 'p',
-                              #hash_path('a', 'c', 'o')),
-            #timestamp + '.ts')
-        #self.assertFalse(os.path.isfile(objfile))
-        #self.assertEquals(len(os.listdir(os.path.dirname(objfile))), 1)
-
-        #sleep(.00001)
-        #timestamp = normalize_timestamp(time())
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-                            #headers={
-                                #'X-Timestamp': timestamp,
-                                #'Content-Type': 'application/octet-stream',
-                                #'Content-Length': '4',
-                            #})
-        #req.body = 'test'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
-
-        ## The following should *not* have created a tombstone file.
-        #timestamp = normalize_timestamp(float(timestamp) - 1)
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-                            #environ={'REQUEST_METHOD': 'DELETE'},
-                            #headers={'X-Timestamp': timestamp})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 409)
-        #objfile = os.path.join(
-            #self.testdir, 'sda1',
-            #storage_directory(object_server.DATADIR, 'p',
-                              #hash_path('a', 'c', 'o')),
-            #timestamp + '.ts')
-        #self.assertFalse(os.path.isfile(objfile))
-        #self.assertEquals(len(os.listdir(os.path.dirname(objfile))), 1)
-
-        #sleep(.00001)
-        #timestamp = normalize_timestamp(time())
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-                            #environ={'REQUEST_METHOD': 'DELETE'},
-                            #headers={'X-Timestamp': timestamp})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 204)
-        #objfile = os.path.join(
-            #self.testdir, 'sda1',
-            #storage_directory(object_server.DATADIR, 'p',
-                              #hash_path('a', 'c', 'o')),
-            #timestamp + '.ts')
-        #self.assert_(os.path.isfile(objfile))
-
-    #def test_DELETE_container_updates(self):
-        ## Test swift.obj.server.ObjectController.DELETE and container
-        ## updates, making sure container update is called in the correct
-        ## state.
-        #timestamp = normalize_timestamp(time())
-        #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-                            #headers={
-                                #'X-Timestamp': timestamp,
-                                #'Content-Type': 'application/octet-stream',
-                                #'Content-Length': '4',
-                            #})
-        #req.body = 'test'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
-
-        #calls_made = [0]
-
-        #def our_container_update(*args, **kwargs):
-            #calls_made[0] += 1
-
-        #orig_cu = self.object_controller.container_update
-        #self.object_controller.container_update = our_container_update
-        #try:
-            ## The following request should return 409 (HTTP Conflict). A
-            ## tombstone file should not have been created with this timestamp.
-            #timestamp = normalize_timestamp(float(timestamp) - 1)
-            #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-                                #environ={'REQUEST_METHOD': 'DELETE'},
-                                #headers={'X-Timestamp': timestamp})
-            #resp = req.get_response(self.object_controller)
-            #self.assertEquals(resp.status_int, 409)
-            #objfile = os.path.join(
-                #self.testdir, 'sda1',
-                #storage_directory(object_server.DATADIR, 'p',
-                                  #hash_path('a', 'c', 'o')),
-                #timestamp + '.ts')
-            #self.assertFalse(os.path.isfile(objfile))
-            #self.assertEquals(len(os.listdir(os.path.dirname(objfile))), 1)
-            #self.assertEquals(0, calls_made[0])
-
-            ## The following request should return 204, and the object should
-            ## be truly deleted (container update is performed) because this
-            ## timestamp is newer. A tombstone file should have been created
-            ## with this timestamp.
-            #sleep(.00001)
-            #timestamp = normalize_timestamp(time())
-            #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-                                #environ={'REQUEST_METHOD': 'DELETE'},
-                                #headers={'X-Timestamp': timestamp})
-            #resp = req.get_response(self.object_controller)
-            #self.assertEquals(resp.status_int, 204)
-            #objfile = os.path.join(
-                #self.testdir, 'sda1',
-                #storage_directory(object_server.DATADIR, 'p',
-                                  #hash_path('a', 'c', 'o')),
-                #timestamp + '.ts')
-            #self.assert_(os.path.isfile(objfile))
-            #self.assertEquals(1, calls_made[0])
-            #self.assertEquals(len(os.listdir(os.path.dirname(objfile))), 1)
-
-            ## The following request should return a 404, as the object should
-            ## already have been deleted, but it should have also performed a
-            ## container update because the timestamp is newer, and a tombstone
-            ## file should also exist with this timestamp.
-            #sleep(.00001)
-            #timestamp = normalize_timestamp(time())
-            #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-                                #environ={'REQUEST_METHOD': 'DELETE'},
-                                #headers={'X-Timestamp': timestamp})
-            #resp = req.get_response(self.object_controller)
-            #self.assertEquals(resp.status_int, 404)
-            #objfile = os.path.join(
-                #self.testdir, 'sda1',
-                #storage_directory(object_server.DATADIR, 'p',
-                                  #hash_path('a', 'c', 'o')),
-                #timestamp + '.ts')
-            #self.assert_(os.path.isfile(objfile))
-            #self.assertEquals(2, calls_made[0])
-            #self.assertEquals(len(os.listdir(os.path.dirname(objfile))), 1)
-
-            ## The following request should return a 404, as the object should
-            ## already have been deleted, and it should not have performed a
-            ## container update because the timestamp is older, or created a
-            ## tombstone file with this timestamp.
-            #timestamp = normalize_timestamp(float(timestamp) - 1)
-            #req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-                                #environ={'REQUEST_METHOD': 'DELETE'},
-                                #headers={'X-Timestamp': timestamp})
-            #resp = req.get_response(self.object_controller)
-            #self.assertEquals(resp.status_int, 404)
-            #objfile = os.path.join(
-                #self.testdir, 'sda1',
-                #storage_directory(object_server.DATADIR, 'p',
-                                  #hash_path('a', 'c', 'o')),
-                #timestamp + '.ts')
-            #self.assertFalse(os.path.isfile(objfile))
-            #self.assertEquals(2, calls_made[0])
-            #self.assertEquals(len(os.listdir(os.path.dirname(objfile))), 1)
-        #finally:
-            #self.object_controller.container_update = orig_cu
+            # The following request should return a 404, as the object should
+            # already have been deleted, and it should not have performed a
+            # container update because the timestamp is older, or created a
+            # tombstone file with this timestamp.
+            timestamp = normalize_timestamp(float(timestamp) - 1)
+            req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                                environ={'REQUEST_METHOD': 'DELETE'},
+                                headers={'X-Timestamp': timestamp})
+            resp = req.get_response(self.object_controller)
+            self.assertEquals(resp.status_int, 409)
+            objfile = os.path.join(
+                self.testdir, 'sda1',
+                storage_directory(object_server.DATADIR, 'p',
+                                  '0b4c12d7e0a73840c1c4f148fda3b037'),
+                timestamp + '.backref')
+            self.assertFalse(os.path.isfile(objfile))
+            self.assertEquals(len(os.listdir(os.path.dirname(objfile))), 4)
+        finally:
+            self.object_controller.container_update = orig_cu
 
     def test_call(self):
         # Test swift.obj.server.ObjectController.__call__
@@ -1397,26 +1403,26 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(errbuf.getvalue(), '')
         self.assertEquals(outbuf.getvalue()[:4], '400 ')
 
-#        inbuf = StringIO()
-        #errbuf = StringIO()
-        #outbuf = StringIO()
-        #self.object_controller.__call__({'REQUEST_METHOD': 'GET',
-                                         #'SCRIPT_NAME': '',
-                                         #'PATH_INFO': '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-                                         #'SERVER_NAME': '127.0.0.1',
-                                         #'SERVER_PORT': '8080',
-                                         #'SERVER_PROTOCOL': 'HTTP/1.0',
-                                         #'CONTENT_LENGTH': '0',
-                                         #'wsgi.version': (1, 0),
-                                         #'wsgi.url_scheme': 'http',
-                                         #'wsgi.input': inbuf,
-                                         #'wsgi.errors': errbuf,
-                                         #'wsgi.multithread': False,
-                                         #'wsgi.multiprocess': False,
-                                         #'wsgi.run_once': False},
-                                        #start_response)
-        #self.assertEquals(errbuf.getvalue(), '')
-        #self.assertEquals(outbuf.getvalue()[:4], '404 ')
+        inbuf = StringIO()
+        errbuf = StringIO()
+        outbuf = StringIO()
+        self.object_controller.__call__({'REQUEST_METHOD': 'GET',
+                                         'SCRIPT_NAME': '',
+                                         'PATH_INFO': '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
+                                         'SERVER_NAME': '127.0.0.1',
+                                         'SERVER_PORT': '8080',
+                                         'SERVER_PROTOCOL': 'HTTP/1.0',
+                                         'CONTENT_LENGTH': '0',
+                                         'wsgi.version': (1, 0),
+                                         'wsgi.url_scheme': 'http',
+                                         'wsgi.input': inbuf,
+                                         'wsgi.errors': errbuf,
+                                         'wsgi.multithread': False,
+                                         'wsgi.multiprocess': False,
+                                         'wsgi.run_once': False},
+                                        start_response)
+        self.assertEquals(errbuf.getvalue(), '')
+        self.assertEquals(outbuf.getvalue()[:4], '404 ')
 
         inbuf = StringIO()
         errbuf = StringIO()
@@ -1541,16 +1547,16 @@ class TestObjectController(unittest.TestCase):
         headers = readuntil2crlfs(fd)
         exp = 'HTTP/1.1 201'
         self.assertEquals(headers[:len(exp)], exp)
- #       sock = connect_tcp(('localhost', port))
-        #fd = sock.makefile()
-        #fd.write('GET /sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o HTTP/1.1\r\nHost: localhost\r\n'
-                 #'Connection: close\r\n\r\n')
-        #fd.flush()
-        #headers = readuntil2crlfs(fd)
-        #exp = 'HTTP/1.1 200'
-        #self.assertEquals(headers[:len(exp)], exp)
-        #response = fd.read()
-        #self.assertEquals(response, 'oh hai')
+        sock = connect_tcp(('localhost', port))
+        fd = sock.makefile()
+        fd.write('GET /sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o HTTP/1.1\r\nHost: localhost\r\n'
+                 'Connection: close\r\n\r\n')
+        fd.flush()
+        headers = readuntil2crlfs(fd)
+        exp = 'HTTP/1.1 200'
+        self.assertEquals(headers[:len(exp)], exp)
+        response = fd.read()
+        self.assertEquals(response, 'oh hai')
         killer.kill()
 
     def test_chunked_content_length_mismatch_zero(self):
@@ -1570,39 +1576,18 @@ class TestObjectController(unittest.TestCase):
         headers = readuntil2crlfs(fd)
         exp = 'HTTP/1.1 201'
         self.assertEquals(headers[:len(exp)], exp)
- #       sock = connect_tcp(('localhost', port))
-        #fd = sock.makefile()
-        #fd.write('GET /sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o HTTP/1.1\r\nHost: localhost\r\n'
-                 #'Connection: close\r\n\r\n')
-        #fd.flush()
-        #headers = readuntil2crlfs(fd)
-        #exp = 'HTTP/1.1 200'
-        #self.assertEquals(headers[:len(exp)], exp)
-        #response = fd.read()
-        #self.assertEquals(response, 'oh hai')
+        sock = connect_tcp(('localhost', port))
+        fd = sock.makefile()
+        fd.write('GET /sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o HTTP/1.1\r\nHost: localhost\r\n'
+                 'Connection: close\r\n\r\n')
+        fd.flush()
+        headers = readuntil2crlfs(fd)
+        exp = 'HTTP/1.1 200'
+        self.assertEquals(headers[:len(exp)], exp)
+        response = fd.read()
+        self.assertEquals(response, 'oh hai')
         killer.kill()
 
-    def test_max_object_name_length(self):
-        timestamp = normalize_timestamp(time())
-        max_name_len = constraints.MAX_OBJECT_NAME_LENGTH
-        req = Request.blank(
-            '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/' + ('1' * max_name_len),
-            environ={'REQUEST_METHOD': 'PUT'},
-            headers={'X-Timestamp': timestamp,
-                     'Content-Length': '4',
-                     'Content-Type': 'application/octet-stream'})
-        req.body = 'DATA'
-        resp = req.get_response(self.object_controller)
-        self.assertEquals(resp.status_int, 201)
- #       req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c40148fda3b037/id/a/c/' + ('2' * (max_name_len + 1)),
-            #environ={'REQUEST_METHOD': 'PUT'},
-            #headers={'X-Timestamp': timestamp,
-                     #'Content-Length': '4',
-                     #'Content-Type': 'application/octet-stream'})
-        #req.body = 'DATA'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 400)
 
     def test_max_upload_time(self):
 
@@ -1663,67 +1648,27 @@ class TestObjectController(unittest.TestCase):
             body='    ')
         resp = req.get_response(self.object_controller)
         self.assertEquals(resp.status_int, 201)
-   #     req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-            #headers={'If-Unmodified-Since': 'Not a valid date'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-            #headers={'If-Modified-Since': 'Not a valid date'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-            #headers={'If-Unmodified-Since': 'Sat, 29 Oct 1000 19:43:31 GMT'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 412)
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-            #headers={'If-Modified-Since': 'Sat, 29 Oct 1000 19:43:31 GMT'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 412)
-
-    def test_content_encoding(self):
         req = Request.blank(
-            '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-            headers={'X-Timestamp': normalize_timestamp(time()),
-                     'Content-Length': '4', 'Content-Type': 'text/plain',
-                     'Content-Encoding': 'gzip'},
-            body='    ')
+            '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+            headers={'If-Unmodified-Since': 'Not a valid date'})
         resp = req.get_response(self.object_controller)
-        self.assertEquals(resp.status_int, 201)
- #       req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-        #self.assertEquals(resp.headers['content-encoding'], 'gzip')
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'HEAD'})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 200)
-        #self.assertEquals(resp.headers['content-encoding'], 'gzip')
-
-
-    def test_manifest_head_request(self):
-        timestamp = normalize_timestamp(time())
+        self.assertEquals(resp.status_int, 200)
         req = Request.blank(
-            '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-            headers={'X-Timestamp': timestamp,
-                     'Content-Type': 'text/plain',
-                     'Content-Length': '0',
-                     'X-Object-Manifest': 'c/o/'})
-        req.body = 'hi'
+            '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+            headers={'If-Modified-Since': 'Not a valid date'})
         resp = req.get_response(self.object_controller)
-        objfile = os.path.join(
-            self.testdir, 'sda1',
-            storage_directory(object_server.DATADIR, 'p',
-                              '0b4c12d7e0a73840c1c4f148fda3b037'),
-            '0b4c12d7e0a73840c1c4f148fda3b037' + '.data')
-        self.assert_(os.path.isfile(objfile))
-        req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-                            environ={'REQUEST_METHOD': 'HEAD'})
+        self.assertEquals(resp.status_int, 200)
+        req = Request.blank(
+            '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+            headers={'If-Unmodified-Since': 'Sat, 29 Oct 1000 19:43:31 GMT'})
         resp = req.get_response(self.object_controller)
-        self.assertEquals(resp.body, '')
+        self.assertEquals(resp.status_int, 412)
+        req = Request.blank(
+            '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+            headers={'If-Modified-Since': 'Sat, 29 Oct 1000 19:43:31 GMT'})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 412)
+
 
     def test_async_update_http_connect(self):
         given_args = []
@@ -1972,163 +1917,54 @@ class TestObjectController(unittest.TestCase):
                     'referer': 'PUT http://localhost/v1/a/c/o'},
                 'sda1'])
 
- #   def test_DELETE_if_delete_at(self):
-        #test_time = time() + 10000
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-            #headers={'X-Timestamp': normalize_timestamp(test_time - 99),
-                     #'Content-Length': '4',
-                     #'Content-Type': 'application/octet-stream'})
-        #req.body = 'TEST'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
 
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-            #environ={'REQUEST_METHOD': 'DELETE'},
-            #headers={'X-Timestamp': normalize_timestamp(test_time - 98)})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 204)
 
-        #delete_at_timestamp = int(test_time - 1)
-        #delete_at_container = str(
-            #delete_at_timestamp /
-            #self.object_controller.expiring_objects_container_divisor *
-            #self.object_controller.expiring_objects_container_divisor)
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-            #headers={'X-Timestamp': normalize_timestamp(test_time - 97),
-                     #'X-Delete-At': str(delete_at_timestamp),
-                     #'X-Delete-At-Container': delete_at_container,
-                     #'Content-Length': '4',
-                     #'Content-Type': 'application/octet-stream'})
-        #req.body = 'TEST'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
+    def test_REPLICATE_works(self):
 
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-            #environ={'REQUEST_METHOD': 'DELETE'},
-            #headers={'X-Timestamp': normalize_timestamp(test_time - 95),
-                     #'X-If-Delete-At': str(int(test_time))})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 412)
+        def fake_get_hashes(*args, **kwargs):
+            return 0, {1: 2}
 
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-            #environ={'REQUEST_METHOD': 'DELETE'},
-            #headers={'X-Timestamp': normalize_timestamp(test_time - 95)})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 204)
+        def my_tpool_execute(func, *args, **kwargs):
+            return func(*args, **kwargs)
 
-        #delete_at_timestamp = int(test_time - 1)
-        #delete_at_container = str(
-            #delete_at_timestamp /
-            #self.object_controller.expiring_objects_container_divisor *
-            #self.object_controller.expiring_objects_container_divisor)
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-            #headers={'X-Timestamp': normalize_timestamp(test_time - 94),
-                     #'X-Delete-At': str(delete_at_timestamp),
-                     #'X-Delete-At-Container': delete_at_container,
-                     #'Content-Length': '4',
-                     #'Content-Type': 'application/octet-stream'})
-        #req.body = 'TEST'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
+        was_get_hashes = object_server.get_hashes
+        object_server.get_hashes = fake_get_hashes
+        was_tpool_exe = tpool.execute
+        tpool.execute = my_tpool_execute
+        try:
+            req = Request.blank(
+                '/sda1/p/suff',
+                environ={'REQUEST_METHOD': 'REPLICATE'},
+                headers={})
+            resp = req.get_response(self.object_controller)
+            self.assertEquals(resp.status_int, 200)
+            p_data = pickle.loads(resp.body)
+            self.assertEquals(p_data, {1: 2})
+        finally:
+            tpool.execute = was_tpool_exe
+            object_server.get_hashes = was_get_hashes
 
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'DELETE'},
-            #headers={'X-Timestamp': normalize_timestamp(test_time - 92),
-                     #'X-If-Delete-At': str(int(test_time))})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 412)
+    def test_REPLICATE_timeout(self):
 
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'DELETE'},
-            #headers={'X-Timestamp': normalize_timestamp(test_time - 92),
-                     #'X-If-Delete-At': delete_at_timestamp})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 204)
+        def fake_get_hashes(*args, **kwargs):
+            raise Timeout()
 
-#    def test_PUT_delete_at_in_past(self):
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-            #headers={'X-Timestamp': normalize_timestamp(time()),
-                     #'X-Delete-At': str(int(time() - 1)),
-                     #'Content-Length': '4',
-                     #'Content-Type': 'application/octet-stream'})
-        #req.body = 'TEST'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 400)
-        #self.assertTrue('X-Delete-At in past' in resp.body)
+        def my_tpool_execute(func, *args, **kwargs):
+            return func(*args, **kwargs)
 
-    #def test_POST_delete_at_in_past(self):
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-            #environ={'REQUEST_METHOD': 'PUT'},
-            #headers={'X-Timestamp': normalize_timestamp(time()),
-                     #'Content-Length': '4',
-                     #'Content-Type': 'application/octet-stream'})
-        #req.body = 'TEST'
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 201)
-
-        #req = Request.blank(
-            #'/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o',
-            #environ={'REQUEST_METHOD': 'POST'},
-            #headers={'X-Timestamp': normalize_timestamp(time() + 1),
-                     #'X-Delete-At': str(int(time() - 1))})
-        #resp = req.get_response(self.object_controller)
-        #self.assertEquals(resp.status_int, 400)
-        #self.assertTrue('X-Delete-At in past' in resp.body)
-
-    #def test_REPLICATE_works(self):
-
-        #def fake_get_hashes(*args, **kwargs):
-            #return 0, {1: 2}
-
-        #def my_tpool_execute(func, *args, **kwargs):
-            #return func(*args, **kwargs)
-
-        #was_get_hashes = object_server.get_hashes
-        #object_server.get_hashes = fake_get_hashes
-        #was_tpool_exe = tpool.execute
-        #tpool.execute = my_tpool_execute
-        #try:
-            #req = Request.blank(
-                #'/sda1/p/suff',
-                #environ={'REQUEST_METHOD': 'REPLICATE'},
-                #headers={})
-            #resp = req.get_response(self.object_controller)
-            #self.assertEquals(resp.status_int, 200)
-            #p_data = pickle.loads(resp.body)
-            #self.assertEquals(p_data, {1: 2})
-        #finally:
-            #tpool.execute = was_tpool_exe
-            #object_server.get_hashes = was_get_hashes
-
-    #def test_REPLICATE_timeout(self):
-
-        #def fake_get_hashes(*args, **kwargs):
-            #raise Timeout()
-
-        #def my_tpool_execute(func, *args, **kwargs):
-            #return func(*args, **kwargs)
-
-        #was_get_hashes = object_server.get_hashes
-        #object_server.get_hashes = fake_get_hashes
-        #was_tpool_exe = tpool.execute
-        #tpool.execute = my_tpool_execute
-        #try:
-            #req = Request.blank(
-                #'/sda1/p/suff',
-                #environ={'REQUEST_METHOD': 'REPLICATE'},
-                #headers={})
-            #self.assertRaises(Timeout, self.object_controller.REPLICATE, req)
-        #finally:
-            #tpool.execute = was_tpool_exe
-            #object_server.get_hashes = was_get_hashes
+        was_get_hashes = object_server.get_hashes
+        object_server.get_hashes = fake_get_hashes
+        was_tpool_exe = tpool.execute
+        tpool.execute = my_tpool_execute
+        try:
+            req = Request.blank(
+                '/sda1/p/suff',
+                environ={'REQUEST_METHOD': 'REPLICATE'},
+                headers={})
+            self.assertRaises(Timeout, self.object_controller.REPLICATE, req)
+        finally:
+            tpool.execute = was_tpool_exe
+            object_server.get_hashes = was_get_hashes
 
     def test_PUT_with_full_drive(self):
 

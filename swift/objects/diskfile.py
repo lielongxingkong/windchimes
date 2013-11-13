@@ -46,6 +46,7 @@ PICKLE_PROTOCOL = 2
 ONE_WEEK = 604800
 HASH_FILE = 'hashes.pkl'
 METADATA_KEY = 'user.object.metadata'
+BACKREF_MERGE_COUNT = 1000
 # These are system-set metadata keys that cannot be changed with a POST.
 # They should be lowercase.
 DATAFILE_SYSTEM_META = set('content-length content-type deleted etag'.split())
@@ -87,8 +88,9 @@ def write_metadata(fd, metadata):
 def read_backref(fp):
     return pickle.load(fp)
 
-def write_backref(fp, metadata):
-    pickle.dump(metadata, fp, PICKLE_PROTOCOL)
+def write_backref_and_map(fp, backref):
+    backref = pickle.dumps(backref, PICKLE_PROTOCOL)
+    os.write(fp, backref)
 
 def quarantine_renamer(device_path, corrupted_file_path):
     """
@@ -113,10 +115,11 @@ def quarantine_renamer(device_path, corrupted_file_path):
         renamer(from_dir, to_dir)
     return to_dir
 
-#deprecate
 def hash_cleanup_listdir(hsh_path, reclaim_age=ONE_WEEK):
     """
     List contents of a hash directory and clean up any old files.
+    Clean Up old metadata, other data not clean
+    four type in dir: .backref .backmap .meta .data
 
     :param hsh_path: object hash path
     :param reclaim_age: age in seconds at which to remove tombstones
@@ -124,62 +127,39 @@ def hash_cleanup_listdir(hsh_path, reclaim_age=ONE_WEEK):
     """
     files = os.listdir(hsh_path)
 
-    if len(files) == 1:
-        if files[0].endswith('.ts'):
-            # remove tombstones older than reclaim_age
-            ts = files[0].rsplit('.', 1)[0]
-            if (time.time() - float(ts)) > reclaim_age:
+    if len(files) == 1 and files[0].endswith('.backmap'):
+            # remove empty older than reclaim_age
+            emptybackmap = files[0].rsplit('.', 1)[0]
+            if (time.time() - float(emptybackmap)) > reclaim_age:
                 os.unlink(join(hsh_path, files[0]))
                 files.remove(files[0])
     elif files:
+        backref = backmap = meta = data = None
         files.sort(reverse=True)
-        meta = data = tomb = backref = None
-        for filename in list(files):
-            if filename.endswith('.meta'):
-                if not meta:
-                    meta = filename
-                else:
+        for filename in files:
+            if not backref and filename.endswith('.backref'):
+                backref = filename
+                continue
+            if not backmap and filename.endswith('.backmap'):
+                backmap = filename
+                continue
+            if not meta and filename.endswith('.meta'):
+                meta = filename
+                continue
+            #delete old meta
+            if meta and filename.endswith('.meta'):
+                os.unlink(join(hsh_path, filename))
+                files.remove(filename)
+            if not data and filename.endswith('.data'):
+                data = filename
+                continue
+        #data is none, delele meta and backref
+        if data is None:
+            for filename in files:
+                if filename.endswith('.meta') or filename.endswith('.backref'):
                     os.unlink(join(hsh_path, filename))
                     files.remove(filename)
-
-            if filename.endswith('.backref'):
-                if not backref:
-                    backref = filename
-                else:
-                    os.unlink(join(hsh_path, filename))
-                    files.remove(filename)
-            if filename.endswith('.ts'):
-                if not tomb:
-                    tomb = filename
-                else:
-                    os.unlink(join(hsh_path, filename))
-                    files.remove(filename)
-            if filename.endswith('.data'):
-                if not data:
-                    data = filename
-
-        del_tomb = False
-        if backref:
-            if backref < tomb:
-                os.unlink(join(hsh_path, backref))
-                files.remove(backref)
-                os.unlink(join(hsh_path, data))
-                files.remove(data)
-            else:
-                del_tomb = True
-
-        if meta:
-            if meta < tomb:
-                os.unlink(join(hsh_path, meta))
-                files.remove(meta)
-            else:
-                del_tomb = True
-        if del_tomb:
-            os.unlink(join(hsh_path, tomb))
-            files.remove(tomb)
-
     return files
-
 
 def hash_suffix(path, reclaim_age):
     """
@@ -343,10 +323,13 @@ class DiskWriter(object):
             drop_buffer_cache(self.fd, self.last_sync, diff)
             self.last_sync = self.upload_size
 
-    def _finalize_put(self, metadata, target_path):
+    def _finalize_put(self, metadata, target_path, extension = '.meta'):
         # Write the metadata before calling fsync() so that both data and
         # metadata are flushed to disk.
-        write_metadata(self.fd, metadata)
+        if extension == ".meta" or extension == '.data':
+            write_metadata(self.fd, metadata)
+        else:
+            write_backref_and_map(self.fd, metadata)
         # We call fsync() before calling drop_cache() to lower the amount
         # of redundant work the drop cache code will perform on the pages
         # (now that after fsync the pages will be all clean).
@@ -359,10 +342,9 @@ class DiskWriter(object):
         # After the rename completes, this object will be available for
         # other requests to reference.
         renamer(self.tmppath, target_path)
-#TODO how to remove this function?
         hash_cleanup_listdir(self.disk_file.datadir)
 
-    def put(self, metadata, extension='.data'):
+    def put(self, metadata, extension = '.data'):
         """
         Finalize writing the file on disk, and renames it from the temp file
         to the real location.  This should be called after the data has been
@@ -379,9 +361,8 @@ class DiskWriter(object):
         else:
             filename = normalize_timestamp(metadata['X-Timestamp'])
         target_path = join(self.disk_file.datadir, filename + extension)
-
         self.threadpool.force_run_in_thread(
-            self._finalize_put, metadata, target_path)
+            self._finalize_put, metadata, target_path, extension)
 
 
 class DiskFile(object):
@@ -421,7 +402,6 @@ class DiskFile(object):
         self._metadata = None
         self._backref = None
         self.data_file = None
-        self.backref_file = None
         self._data_file_size = None
         self.fp = None
         self.iter_etag = None
@@ -447,15 +427,14 @@ class DiskFile(object):
 
         :raises DiskFileCollision: on md5 collision
         """
-        backref_file, data_file, meta_file, ts_file = self._get_ondisk_file()
+        data_file, meta_file, backmap_file = self._get_ondisk_file()
         if not data_file:
-            if ts_file:
-                self._construct_from_ts_file(ts_file)
+            if backmap_file:
+                self._construct_from_deleted_file(backmap_file)
         else:
-            self.fp = self._construct_from_data_file(data_file, meta_file, backref_file)
+            self.fp = self._construct_from_data_file(data_file, meta_file, backmap_file)
         self._verify_close = verify_close
         self._metadata = self._metadata or {}
-        self._backref = self._backref or {}
         return self
 
     def __enter__(self):
@@ -471,23 +450,27 @@ class DiskFile(object):
         Do the work to figure out if the data directory exists, and if so,
         determine the on-disk files to use.
 
-        :returns: a tuple of data, meta and ts (tombstone) files, in one of
-                  three states:
+        :returns: a tuple of data, meta, backref, and backmap files, in one of
+                  four states:
 
                   1. all four are None
 
                      data directory does not exist, or there are no files in
                      that directory
 
-                  2. ts_file is not None, data_file is None, meta_file is None, backref_file is None
+                  2. backmap_file is not None, data_file is None, meta_file is None, backref_file is None
 
                      object is considered deleted
 
-                  3. data_file is not None, ts_file is None, backref_file is not None
+                  3. backmap_file is None, data_file is not None, meta_file doesn't matter, backref_file is not None
+
+                     backref not merged to backmap
+
+                  4. data_file is not None, backmap_file is not None, meta_file and backref_file doesn't matter
 
                      object exists, and optionally has fast-POST metadata
         """
-        data_file = meta_file = ts_file = backref_file = None
+        meta_file = data_file = backmap_file = backref_file = None
         try:
             files = sorted(os.listdir(self.datadir), reverse=True)
         except OSError as err:
@@ -496,41 +479,38 @@ class DiskFile(object):
             # The data directory does not exist, so the object cannot exist.
         else:
             for afile in files:
-                assert ts_file is None, "On-disk file search loop" \
-                    " continuing after tombstone, %s, encountered" % ts_file
-                assert data_file is None, "On-disk file search loop" \
-                    " continuing after data file, %s, encountered" % data_file
-                if afile.endswith('.ts'):
-                    meta_file = None
-                    ts_file = join(self.datadir, afile)
-                    break
                 if afile.endswith('.meta') and not meta_file:
                     meta_file = join(self.datadir, afile)
-                    # NOTE: this does not exit this loop, since a fast-POST
-                    # operation just updates metadata, writing one or more
-                    # .meta files, the data file will have an older timestamp,
-                    # so we keep looking.
+                    continue
+                if afile.endswith('.data') and not data_file:
+                    data_file = join(self.datadir, afile)
                     continue
                 if afile.endswith('.backref') and not backref_file:
                     backref_file = join(self.datadir, afile)
                     continue
-                if afile.endswith('.data'):
-                    data_file = join(self.datadir, afile)
-                    break
-        assert ((data_file is None and meta_file is None and ts_file is None and backref_file is None)
-                or (ts_file is not None and data_file is None
-                    and meta_file is None and backref_file is None)
-                or (data_file is not None and ts_file is None and backref_file is not None)), \
-            "On-disk file search algorithm contract is broken: backref_file: %s, data_file:" \
-            " %s, meta_file: %s, ts_file: %s" % (backref_file, data_file, meta_file, ts_file)
-        return backref_file, data_file, meta_file, ts_file
+                if afile.endswith('.backmap') and not backmap_file:
+                    backmap_file = join(self.datadir, afile)
+                    continue
+        check_pass = (data_file is None and meta_file is None and backmap_file is None and backref_file is None)\
+                or (backmap_file is not None and data_file is None and meta_file is None and backref_file is None)\
+                or (backmap_file is None and data_file is not None and backref_file is not None)\
+                or (data_file is not None and backmap_file is not None)
+        if check_pass:
+            return data_file, meta_file, backmap_file
+        else:
+            if data_file is None and backmap_file is None:
+                return None, None, None
+                raise DiskFileCollision("On-disk file search algorithm contract is broken: backref_file: %s, data_file:" \
+                    " %s, meta_file: %s, backmap_file: %s" % (backref_file, data_file, meta_file, backmap_file))
+            raise DiskFileCollision("On-disk file search algorithm contract is broken: backref_file: %s, data_file:" \
+            " %s, meta_file: %s, backmap_file: %s" % (backref_file, data_file, meta_file, backmap_file))
 
-    def _construct_from_ts_file(self, ts_file):
+    def _construct_from_deleted_file(self, backmap_file):
         """
         A tombstone means the object is considered deleted. We just need to
         pull the metadata from the tombstone file which has the timestamp.
         """
-        with open(ts_file) as fp:
+        with open(backmap_file) as fp:
             self._metadata = read_metadata(fp)
         self._metadata['deleted'] = True
 
@@ -551,7 +531,7 @@ class DiskFile(object):
                 raise DiskFileCollision('Client path does not match path '
                                         'stored in object metadata')
 
-    def _construct_from_data_file(self, data_file, meta_file, backref_file):
+    def _construct_from_data_file(self, data_file, meta_file, backmap_file):
         """
         Open the data file to fetch its metadata, and fetch the metadata from
         the fast-POST .meta file as well if it exists, merging them properly.
@@ -569,14 +549,20 @@ class DiskFile(object):
             self._metadata.update(sys_metadata)
         else:
             self._metadata = datafile_metadata
-        if backref_file:
-            with open(backref_file, 'rb') as bfp:
-                #self._backref  should never be read because of concurrency
-                self._backref = read_backref(bfp)
         self._verify_name()
         self.data_file = data_file
-        self.backref_file = backref_file
+        self.backmap_file = backmap_file
         return fp
+
+    def merge_backrefs(self, files, max_cnt = None):
+        pass
+        #self.datadir
+        # count = max(len(files), max_cnt)
+        #backmap = read_backmap()
+        #while count:
+            #backref = read_backref()
+            #orig_map.update()
+        #    count -= 1
 
     def __iter__(self):
         """Returns an iterator over the data file."""
@@ -697,20 +683,6 @@ class DiskFile(object):
             raise DiskFileNotOpenError()
         return self._metadata
 
-    #def get_backref(self):
-    #    if self._backref is None:
-    #        raise DiskFileNotOpenError
-    #    return self._backref
-
-    def put_backref(self, backref):
-
-        def _put_backref(backref, target_path):
-            with open(target_path, 'wb') as f:
-                write_backref(f, backref)
-
-        target_path = join(self.datadir, self.name + '.backref')
-        self.threadpool.force_run_in_thread(_put_backref, backref, target_path)
-
     def is_deleted(self):
         """
         Check if the file is deleted.
@@ -718,7 +690,7 @@ class DiskFile(object):
         :returns: True if the file doesn't exist or has been flagged as
                   deleted.
         """
-        return not (self.data_file and self.backref_file) or 'deleted' in self._metadata
+        return not self.data_file or 'deleted' in self._metadata
 
 
     @contextmanager
@@ -751,25 +723,16 @@ class DiskFile(object):
             except OSError:
                 pass
 
-    def put_metadata(self, metadata, tombstone=False):
+    def put_metadata(self, metadata, backref=False):
         """
         Short hand for putting metadata to .meta and .ts files.
 
         :param metadata: dictionary of metadata to be written
         :param tombstone: whether or not we are writing a tombstone
         """
-        extension = '.ts' if tombstone else '.meta'
+        extension = '.backref' if backref else '.meta'
         with self.create() as writer:
             writer.put(metadata, extension=extension)
-
-    def delete(self, timestamp):
-        """
-        Simple short hand for marking an object as deleted. Provides
-        a layer of abstraction.
-
-        :param timestamp: time stamp to mark the object deleted at
-        """
-        self.put_metadata({'X-Timestamp': timestamp}, tombstone=True)
 
     def _drop_cache(self, fd, offset, length):
         """Method for no-oping buffer cache drop method."""

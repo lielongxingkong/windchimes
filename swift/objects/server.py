@@ -123,17 +123,6 @@ class ObjectController(object):
         objfile = os.path.join(diskfile.datadir, diskfile.name + '.data')
         return os.path.isfile(objfile)
 
-    def back_reference(self, backpath, uid, metadata):
-        if metadata.has_key('Backrefer-List') == False or metadata['Backrefer-List'] == None:
-            metadata['Backrefer-List'] = { backpath : uid }
-        else:
-            metadata['Backrefer-List'][backpath] = uid
-        return metadata
-
-    def del_back_reference(self, backpath, uid, metadata):
-        metadata['Backrefer-List'].pop(backpath)
-        return metadata
-
     def async_update(self, op, backref, host, partition,
                      contdevice, headers_out, objdevice):
         """
@@ -362,12 +351,8 @@ class ObjectController(object):
             except DiskFileNoSpace:
                 return HTTPInsufficientStorage(drive=device, request=request)
 
-        try:
-            new_backref_map = self.back_reference(backref, uid, orig_backref_map)
-        except KeyError as err:
-            return HTTPBadRequest(body='Backreference format error' + str(err),
-                    request=request, content_type='text/plain')
-        disk_file.put_backref(new_backref_map)
+        backref_post = {'Type': 'link', 'Backref': backref, 'Uid': uid, 'X-Timestamp': request.headers['x-timestamp']}
+        disk_file.put_metadata(backref_post, backref = True)
         meta_for_update = {
             'x-size': orig_metadata['Content-Length'] if file_exists else metadata['Content-Length'],
             'x-etag': orig_metadata['ETag'] if file_exists else metadata['ETag'],
@@ -508,7 +493,6 @@ class ObjectController(object):
             return HTTPInsufficientStorage(drive=device, request=request)
         with disk_file.open():
             orig_metadata = disk_file.get_metadata()
-            orig_backref_map = disk_file.get_backref()
             is_deleted = disk_file.is_deleted()
 
         orig_timestamp = orig_metadata.get('X-Timestamp', 0)
@@ -517,16 +501,11 @@ class ObjectController(object):
             response_class = HTTPNotFound
         else:
             if orig_timestamp < req_timestamp:
-                response_class = HTTPNoContent
+                response_class = HTTPAccepted
+                backref_post = {'Type':'unlink', 'Backref': backref, 'Uid': uid, 'X-Timestamp': request.headers['x-timestamp']}
+                disk_file.put_metadata(backref_post, backref = True)
             else:
                 response_class = HTTPConflict
-        if orig_timestamp < req_timestamp:
-            try:
-                new_backref_map = self.del_back_reference(backref, uid, orig_backref_map)
-            except KeyError as err:
-                return HTTPBadRequest(body='Backreference format error' + str(err),
-                        request=request, content_type='text/plain')
-            disk_file.put_backref(new_backref_map)
         resp = response_class(request=request)
         return resp
 
@@ -538,8 +517,7 @@ class ObjectController(object):
         Handle REPLICATE requests for the Swift Object Server.  This is used
         by the object replicator to get hashes for directories.
         """
-        device, partition, suffix = split_and_validate_path(
-            request, 2, 3, True)
+        device, partition, suffix = split_and_validate_fingerprint_path(request, "REPLICATE")
 
         if self.mount_check and not check_mount(self.devices, device):
             return HTTPInsufficientStorage(drive=device, request=request)
