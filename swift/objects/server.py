@@ -294,7 +294,8 @@ class ObjectController(object):
             return HTTPInsufficientStorage(drive=device, request=request)
         with disk_file.open():
             orig_metadata = disk_file.get_metadata()
-            orig_backref_map= disk_file.get_backref()
+            #back reference should be read before write
+            #orig_backref_map= disk_file.get_backref()
         #check fingerprint
         orig_fingerprint = orig_metadata.get('Finger-Print')
         if orig_fingerprint and orig_fingerprint != fingerprint:
@@ -507,6 +508,7 @@ class ObjectController(object):
             return HTTPInsufficientStorage(drive=device, request=request)
         with disk_file.open():
             orig_metadata = disk_file.get_metadata()
+            #orig_backref_map = disk_file.get_backref()
             is_deleted = disk_file.is_deleted()
 
         orig_timestamp = orig_metadata.get('X-Timestamp', 0)
@@ -519,8 +521,12 @@ class ObjectController(object):
             else:
                 response_class = HTTPConflict
         if orig_timestamp < req_timestamp:
-#TODO unlink
-            disk_file.delete(req_timestamp)
+            try:
+                new_backref_map = self.del_back_reference(backref, uid, orig_backref_map)
+            except KeyError as err:
+                return HTTPBadRequest(body='Backreference format error' + str(err),
+                        request=request, content_type='text/plain')
+            disk_file.put_backref(new_backref_map)
         resp = response_class(request=request)
         return resp
 

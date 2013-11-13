@@ -113,7 +113,7 @@ def quarantine_renamer(device_path, corrupted_file_path):
         renamer(from_dir, to_dir)
     return to_dir
 
-
+#deprecate
 def hash_cleanup_listdir(hsh_path, reclaim_age=ONE_WEEK):
     """
     List contents of a hash directory and clean up any old files.
@@ -123,6 +123,7 @@ def hash_cleanup_listdir(hsh_path, reclaim_age=ONE_WEEK):
     :returns: list of files remaining in the directory, reverse sorted
     """
     files = os.listdir(hsh_path)
+
     if len(files) == 1:
         if files[0].endswith('.ts'):
             # remove tombstones older than reclaim_age
@@ -132,22 +133,51 @@ def hash_cleanup_listdir(hsh_path, reclaim_age=ONE_WEEK):
                 files.remove(files[0])
     elif files:
         files.sort(reverse=True)
-        meta = data = tomb =  None
+        meta = data = tomb = backref = None
         for filename in list(files):
+            if filename.endswith('.meta'):
+                if not meta:
+                    meta = filename
+                else:
+                    os.unlink(join(hsh_path, filename))
+                    files.remove(filename)
+
             if filename.endswith('.backref'):
-                continue
-            if not meta and filename.endswith('.meta'):
-                meta = filename
-            if not data and filename.endswith('.data'):
-                data = filename
-            if not tomb and filename.endswith('.ts'):
-                tomb = filename
-            if (filename < tomb or       # any file older than tomb
-                filename < data or       # any file older than data
-                (filename.endswith('.meta') and
-                 filename < meta)):      # old meta
-                os.unlink(join(hsh_path, filename))
-                files.remove(filename)
+                if not backref:
+                    backref = filename
+                else:
+                    os.unlink(join(hsh_path, filename))
+                    files.remove(filename)
+            if filename.endswith('.ts'):
+                if not tomb:
+                    tomb = filename
+                else:
+                    os.unlink(join(hsh_path, filename))
+                    files.remove(filename)
+            if filename.endswith('.data'):
+                if not data:
+                    data = filename
+
+        del_tomb = False
+        if backref:
+            if backref < tomb:
+                os.unlink(join(hsh_path, backref))
+                files.remove(backref)
+                os.unlink(join(hsh_path, data))
+                files.remove(data)
+            else:
+                del_tomb = True
+
+        if meta:
+            if meta < tomb:
+                os.unlink(join(hsh_path, meta))
+                files.remove(meta)
+            else:
+                del_tomb = True
+        if del_tomb:
+            os.unlink(join(hsh_path, tomb))
+            files.remove(tomb)
+
     return files
 
 
@@ -344,7 +374,11 @@ class DiskWriter(object):
         if not self.tmppath:
             raise ValueError("tmppath is unusable.")
         metadata['name'] = self.disk_file.name
-        target_path = join(self.disk_file.datadir, self.disk_file.name + extension)
+        if extension == '.data':
+            filename = self.disk_file.name
+        else:
+            filename = normalize_timestamp(metadata['X-Timestamp'])
+        target_path = join(self.disk_file.datadir, filename + extension)
 
         self.threadpool.force_run_in_thread(
             self._finalize_put, metadata, target_path)
@@ -477,9 +511,11 @@ class DiskFile(object):
                     # .meta files, the data file will have an older timestamp,
                     # so we keep looking.
                     continue
+                if afile.endswith('.backref') and not backref_file:
+                    backref_file = join(self.datadir, afile)
+                    continue
                 if afile.endswith('.data'):
                     data_file = join(self.datadir, afile)
-                    backref_file = join(self.datadir, afile[:-5] + '.backref')
                     break
         assert ((data_file is None and meta_file is None and ts_file is None and backref_file is None)
                 or (ts_file is not None and data_file is None
@@ -535,6 +571,7 @@ class DiskFile(object):
             self._metadata = datafile_metadata
         if backref_file:
             with open(backref_file, 'rb') as bfp:
+                #self._backref  should never be read because of concurrency
                 self._backref = read_backref(bfp)
         self._verify_name()
         self.data_file = data_file
@@ -660,15 +697,19 @@ class DiskFile(object):
             raise DiskFileNotOpenError()
         return self._metadata
 
-    def get_backref(self):
-        if self._backref is None:
-            raise DiskFileNotOpenError
-        return self._backref
+    #def get_backref(self):
+    #    if self._backref is None:
+    #        raise DiskFileNotOpenError
+    #    return self._backref
 
     def put_backref(self, backref):
+
+        def _put_backref(backref, target_path):
+            with open(target_path, 'wb') as f:
+                write_backref(f, backref)
+
         target_path = join(self.datadir, self.name + '.backref')
-        with open(target_path, 'wb') as f:
-            write_backref(f, backref)
+        self.threadpool.force_run_in_thread(_put_backref, backref, target_path)
 
     def is_deleted(self):
         """
