@@ -508,7 +508,7 @@ class ObjectController(object):
             return HTTPInsufficientStorage(drive=device, request=request)
         with disk_file.open():
             orig_metadata = disk_file.get_metadata()
-            #orig_backref_map = disk_file.get_backref()
+            orig_backref_map = disk_file.get_backref()
             is_deleted = disk_file.is_deleted()
 
         orig_timestamp = orig_metadata.get('X-Timestamp', 0)
