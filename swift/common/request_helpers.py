@@ -96,15 +96,18 @@ def split_and_validate_fingerprint_path(request, op):
     :raises: HTTPBadRequest if something's not okay
     """
     op_map = {
-                'PUT'    : {'minsegs':5, 'maxsegs':5, 'rest_with_last' : True},
-                'GET'    : {'minsegs':3, 'maxsegs':4, 'rest_with_last' : True},
-                'HEAD'   : {'minsegs':3, 'maxsegs':4, 'rest_with_last' : True},
-                'DELETE' : {'minsegs':5, 'maxsegs':5, 'rest_with_last' : True},
-                'POST'   : {'minsegs':3, 'maxsegs':4, 'rest_with_last' : True},
+                'PUT'       : {'minsegs':5, 'maxsegs':5, 'rest_with_last' : True},
+                'GET'       : {'minsegs':3, 'maxsegs':4, 'rest_with_last' : True},
+                'HEAD'      : {'minsegs':3, 'maxsegs':4, 'rest_with_last' : True},
+                'DELETE'    : {'minsegs':5, 'maxsegs':5, 'rest_with_last' : True},
+                'POST'      : {'minsegs':3, 'maxsegs':4, 'rest_with_last' : True},
+                'REPLICATE' : {'minsegs':2, 'maxsegs':3, 'rest_with_last' : True},
             }
     try:
         segs = split_and_validate_path(request, op_map[op]['minsegs'],  op_map[op]['maxsegs'],  op_map[op]['rest_with_last'])
-        if len(segs[2]) == FINGERPRINT_LENGTH:
+        if op == 'REPLICATE':
+            return segs
+        elif len(segs[2]) == FINGERPRINT_LENGTH:
             return segs
         else:
             raise HTTPBadRequest(body="FingerPrint length incorrect and is %d" % len(segs[2]), request=request,
