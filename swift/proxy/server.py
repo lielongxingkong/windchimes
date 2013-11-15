@@ -47,8 +47,8 @@ from swift.common.swob import HTTPBadRequest, HTTPForbidden, \
 class Application(object):
     """WSGI application for the proxy server."""
 
-    def __init__(self, conf, memcache=None, logger=None, storage_ring=None, account_ring=None,
-                 container_ring=None, object_ring=None):
+    def __init__(self, conf, memcache=None, logger=None, account_ring=None,
+                 container_ring=None, object_ring=None, storage_ring=None):
         if conf is None:
             conf = {}
         if logger is None:
