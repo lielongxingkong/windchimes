@@ -853,6 +853,7 @@ class ObjectController(Controller):
     @delay_denial
     def PUT(self, req):
         """HTTP PUT request handler."""
+        import pdb; pdb.set_trace()
         container_info = self.container_info(
             self.account_name, self.container_name, req)
         container_partition = container_info['partition']
@@ -886,7 +887,7 @@ class ObjectController(Controller):
             req.headers['x-delete-at'] = '%d' % (time.time() + x_delete_after)
         partition, nodes = self.app.object_ring.get_nodes(
             self.account_name, self.container_name, self.object_name)
-        # do a HEAD request for container sync and checking object versions
+        # If version info in header, do a HEAD request for container sync and checking object versions
         if 'x-timestamp' in req.headers or \
                 (object_versions and not
                  req.environ.get('swift_versioned_copy')):
@@ -895,7 +896,7 @@ class ObjectController(Controller):
             hresp = self.GETorHEAD_base(
                 hreq, _('Object'), self.app.object_ring, partition,
                 hreq.path_info)
-        # Used by container sync feature
+        # Used by container sync feature, Skip in Object transport
         if 'x-timestamp' in req.headers:
             try:
                 req.headers['X-Timestamp'] = \
@@ -928,6 +929,7 @@ class ObjectController(Controller):
             check_content_type(req)
         if error_response:
             return error_response
+        # for object version management if it is set
         if object_versions and not req.environ.get('swift_versioned_copy'):
             is_manifest = 'x-object-manifest' in req.headers or \
                           'x-object-manifest' in hresp.headers
@@ -965,6 +967,7 @@ class ObjectController(Controller):
         data_source = iter(lambda: reader(self.app.client_chunk_size), '')
         source_header = req.headers.get('X-Copy-From')
         source_resp = None
+        # Server-side copy a object
         if source_header:
             if req.environ.get('swift.orig_req_method', req.method) != 'POST':
                 req.environ.setdefault('swift.log_info', []).append(
@@ -1026,6 +1029,7 @@ class ObjectController(Controller):
 
             req = new_req
 
+        # set object expire
         if 'x-delete-at' in req.headers:
             try:
                 x_delete_at = int(req.headers['x-delete-at'])
@@ -1048,17 +1052,20 @@ class ObjectController(Controller):
         else:
             delete_at_container = delete_at_part = delete_at_nodes = None
 
+        #TODO connect to storage nodes
         node_iter = GreenthreadSafeIterator(
             self.iter_nodes_local_first(self.app.object_ring, partition))
         pile = GreenPile(len(nodes))
         te = req.headers.get('transfer-encoding', '')
         chunked = ('chunked' in te)
 
+        # outgoing_headers sent to Object server to do callback
+        # TODO outgoing_headers should be [object_info, [container_info]]
+        # request forwards storage nodes
         outgoing_headers = self._backend_requests(
             req, len(nodes), container_partition, containers,
             delete_at_container, delete_at_part, delete_at_nodes)
 
-        #outgoing_headers sent to Object server to do callback
         for nheaders in outgoing_headers:
             # RFC2616:8.2.3 disallows 100-continue without a body
             if (req.content_length > 0) or chunked:
