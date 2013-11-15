@@ -579,7 +579,7 @@ class Controller(object):
     def generate_request_headers(self, orig_req=None, additional=None,
                                  transfer=False):
         """
-        Create a list of headers to be used in backend requets
+        Create a list of headers to be used in backend request
 
         :param orig_req: the original request sent by the client to the proxy
         :param additional: additional headers to send to the backend
@@ -740,6 +740,7 @@ class Controller(object):
         """
         part_nodes = ring.get_part_nodes(partition)
         if node_iter is None:
+            #chain part nodes and handoff nodes
             node_iter = itertools.chain(part_nodes,
                                         ring.get_more_nodes(partition))
         num_primary_nodes = len(part_nodes)
@@ -1048,6 +1049,8 @@ class Controller(object):
         bodies = []
         source_headers = []
         sources = []
+        #if x-newest is set, proxy will fetch newest version of replicas
+        #if x-newest not set, proxy only fetch one replica
         newest = config_true_value(req.headers.get('x-newest', 'f'))
         headers = self.generate_request_headers(req, additional=req.headers)
         for node in self.iter_nodes(ring, partition):
@@ -1100,6 +1103,7 @@ class Controller(object):
         res = None
         if sources:
             sources.sort(key=lambda s: source_key(s[0]))
+            #get response has newest 'x-put-timestamp' or 'x-timestamp'
             source, node = sources.pop()
             for src, _junk in sources:
                 self.close_swift_conn(src)

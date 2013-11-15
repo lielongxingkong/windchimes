@@ -1058,6 +1058,7 @@ class ObjectController(Controller):
             req, len(nodes), container_partition, containers,
             delete_at_container, delete_at_part, delete_at_nodes)
 
+        #outgoing_headers sent to Object server to do callback
         for nheaders in outgoing_headers:
             # RFC2616:8.2.3 disallows 100-continue without a body
             if (req.content_length > 0) or chunked:
@@ -1065,6 +1066,7 @@ class ObjectController(Controller):
             pile.spawn(self._connect_put_node, node_iter, partition,
                        req.path_info, nheaders, self.app.logger.thread_locals)
 
+        #start transport
         conns = [conn for conn in pile if conn]
         min_conns = quorum_size(len(nodes))
         if len(conns) < min_conns:
