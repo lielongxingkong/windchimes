@@ -149,6 +149,7 @@ class SegmentedIterable(object):
             if time.time() - self.start_time > self.max_lo_time:
                 raise SegmentError(
                     _('Max LO GET time of %s exceeded.') % self.max_lo_time)
+            #when _load_next_segment is called, self.segment_dict will be updated
             self.segment_dict = self.segment_peek or self.listing.next()
             self.segment_peek = None
             if self.container is None:
@@ -156,6 +157,7 @@ class SegmentedIterable(object):
                     self.segment_dict['name'].lstrip('/').split('/', 1)
             else:
                 container, obj = self.container, self.segment_dict['name']
+            #TODO change partion and path to storage node's
             partition = self.controller.app.object_ring.get_part(
                 self.controller.account_name, container, obj)
             path = '/%s/%s/%s' % (self.controller.account_name, container, obj)
@@ -178,6 +180,8 @@ class SegmentedIterable(object):
                 sleep(max(self.next_get_time - time.time(), 0))
             self.next_get_time = time.time() + \
                 1.0 / self.controller.app.rate_limit_segments_per_sec
+            #TODO fetch object from datanode
+            #change to storage server
             resp = self.controller.GETorHEAD_base(
                 req, _('Object'), self.controller.app.object_ring, partition,
                 path)
@@ -208,6 +212,7 @@ class SegmentedIterable(object):
                          'r_size': resp.content_length,
                          's_etag': self.segment_dict['hash'],
                          's_size': self.segment_dict['bytes']})
+            # self.segment_iter only used by one segment
             self.segment_iter = resp.app_iter
             # See NOTE: swift_conn at top of file about this.
             self.segment_iter_swift_conn = getattr(resp, 'swift_conn', None)
@@ -243,6 +248,7 @@ class SegmentedIterable(object):
         """Standard iterator function that returns the object's contents."""
         try:
             while True:
+                #load 1st segment
                 if not self.segment_iter:
                     self._load_next_segment()
                 while True:
@@ -250,14 +256,18 @@ class SegmentedIterable(object):
                         try:
                             chunk = self.segment_iter.next()
                             break
+                        # chunks in a segment finish itering, raise a StopIteration
                         except StopIteration:
                             if self.length is None or self.length > 0:
+                                # load next segment and  set self.segment_iter of a segment
                                 self._load_next_segment()
                             else:
                                 return
                 self.position += len(chunk)
                 self.have_yielded_data = True
                 yield chunk
+        # all segments was iterated completely
+        # listing.next() raise an exception
         except StopIteration:
             raise
         except SegmentError:
@@ -286,6 +296,7 @@ class SegmentedIterable(object):
                 self.response.status_int = HTTP_SERVICE_UNAVAILABLE
             raise
 
+    #note used
     def app_iter_range(self, start, stop):
         """
         Non-standard iterator function for use with Swob in serving Range
@@ -569,6 +580,7 @@ class ObjectController(Controller):
             large_object = 'SLO'
             lcontainer = None  # container name is included in listing
             try:
+                # get segment list from manifest
                 seg_iter = iter(self._slo_listing_obj_iter(
                     req, self.account_name, self.container_name,
                     self.object_name, partition=partition, initial_resp=resp))
@@ -579,6 +591,8 @@ class ObjectController(Controller):
                         break
                 listing = itertools.chain(listing_page1,
                                           self._remaining_items(seg_iter))
+                # if number of segment in manifest is not too large
+                # same listing_page1 and listing
             except ListingIterNotFound:
                 return HTTPNotFound(request=req)
             except ListingIterNotAuthorized, err:
@@ -853,7 +867,6 @@ class ObjectController(Controller):
     @delay_denial
     def PUT(self, req):
         """HTTP PUT request handler."""
-        import pdb; pdb.set_trace()
         container_info = self.container_info(
             self.account_name, self.container_name, req)
         container_partition = container_info['partition']
