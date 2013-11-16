@@ -853,6 +853,7 @@ class ObjectController(Controller):
     @delay_denial
     def PUT(self, req):
         """HTTP PUT request handler."""
+        import pdb; pdb.set_trace()
         container_info = self.container_info(
             self.account_name, self.container_name, req)
         container_partition = container_info['partition']
