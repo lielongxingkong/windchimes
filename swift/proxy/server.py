@@ -80,7 +80,7 @@ class Application(object):
             self.storage_ring = storage_ring or FingerRing(swift_dir, ring_name='storage')
         except IOError:
             self.storage_ring = None
-        self.storage_redirect = self.storage_ring and config_true_value(conf.get('storage_redirect', 'no'))
+        self.storage_redirect = self.storage_ring and config_true_value(conf.get('storage_redirect', 'true'))
         self.object_ring = object_ring or Ring(swift_dir, ring_name='object')
         self.container_ring = container_ring or Ring(swift_dir,
                                                      ring_name='container')
