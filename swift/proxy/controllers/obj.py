@@ -136,6 +136,7 @@ class SegmentedIterable(object):
             self.response = Response()
         self.next_get_time = 0
         self.start_time = time.time()
+        self.storage_redirect = self.controller.app.storage_redirect
 
     def _load_next_segment(self):
         """
@@ -157,10 +158,15 @@ class SegmentedIterable(object):
                     self.segment_dict['name'].lstrip('/').split('/', 1)
             else:
                 container, obj = self.container, self.segment_dict['name']
-            #TODO change partion and path to storage node's
-            partition = self.controller.app.object_ring.get_part(
-                self.controller.account_name, container, obj)
-            path = '/%s/%s/%s' % (self.controller.account_name, container, obj)
+            #[WindChimes] change partition and path to storage node's
+            if self.storage_redirect:
+                fingerprint = self.segment_dict['fingerprint']
+                partition = self.controller.app.storage_ring.get_part(fingerprint)
+                path = '/%s' % (fingerprint)
+            else:
+                partition = self.controller.app.object_ring.get_part(
+                    self.controller.account_name, container, obj)
+                path = '/%s/%s/%s' % (self.controller.account_name, container, obj)
             req = Request.blank(path)
             if self.seek or (self.length and self.length > 0):
                 bytes_available = \
@@ -180,11 +186,15 @@ class SegmentedIterable(object):
                 sleep(max(self.next_get_time - time.time(), 0))
             self.next_get_time = time.time() + \
                 1.0 / self.controller.app.rate_limit_segments_per_sec
-            #TODO fetch object from datanode
-            #change to storage server
-            resp = self.controller.GETorHEAD_base(
-                req, _('Object'), self.controller.app.object_ring, partition,
-                path)
+            #[WindChimes]
+            if self.storage_redirect:
+                resp = self.controller.GETorHEAD_base(
+                    req, _('Storage'), self.controller.app.storage_ring, partition,
+                    path)
+            else:
+                resp = self.controller.GETorHEAD_base(
+                    req, _('Object'), self.controller.app.object_ring, partition,
+                    path)
             if self.is_slo and resp.status_int == HTTP_NOT_FOUND:
                 raise SegmentError(_(
                     'Could not load object segment %(path)s:'
@@ -820,6 +830,27 @@ class ObjectController(Controller):
 
         return headers
 
+    def _storage_requests(self, req, n_outgoing,
+                          object_partition, objects,
+                          fingerprint, seg_count, seg_order):
+        headers = [self.generate_request_headers(req, additional=req.headers)
+                   for _junk in range(n_outgoing)]
+        for header in headers:
+            header['Connection'] = 'close'
+        for i, obj in enumerate(objects):
+            i = i % len(headers)
+            headers[i]['X-Object-Fingerprint'] = fingerprint
+            headers[i]['X-Object-SegCount'] = seg_count
+            headers[i]['X-Object-SegOrder'] = seg_order
+            headers[i]['X-Object-Partition'] = object_partition
+            headers[i]['X-Object-Host'] = csv_append(
+                headers[i].get('X-Object-Host'),
+                '%(ip)s:%(port)s' % obj)
+            headers[i]['X-Object-Device'] = csv_append(
+                headers[i].get('X-Object-Device'),
+                obj['device'])
+        return headers
+
     def _send_file(self, conn, path):
         """Method for a file PUT coro"""
         while True:
@@ -898,8 +929,29 @@ class ObjectController(Controller):
                                       content_type='text/plain',
                                       body='Non-integer X-Delete-After')
             req.headers['x-delete-at'] = '%d' % (time.time() + x_delete_after)
-        partition, nodes = self.app.object_ring.get_nodes(
-            self.account_name, self.container_name, self.object_name)
+        #[WindChimes] Judge redirect to storage
+        if 'fingerprint' in req.headers or 'seg_count' in req.headers or 'seg_order' in req.headers:
+            if 'fingerprint' in req.headers and 'seg_count' in req.headers \
+                    and 'seg_order' in req.headers and self.app.storage_redirect:
+                redirect_storage = True
+                fingerprint = req.headers['fingerprint']
+                seg_count = req.headers['seg-count']
+                seg_order = req.headers['seg-num']
+            else:
+                if self.app.storage_redirect:
+                    err_body = "Server Doesn't Support Fingerprint Routing"
+                else:
+                    err_body = "Fingerprint info in header not complete"
+                return HTTPBadRequest(request=req, content_type='text/plain', body=err_body)
+        else:
+            redirect_storage = False
+        if redirect_storage:
+            partition, nodes = self.app.storage_ring.get_nodes(fingerprint)
+            object_partition, objects = self.app.object_ring.get_nodes(
+                self.account_name, self.container_name, self.object_name)
+        else:
+            partition, nodes = self.app.object_ring.get_nodes(
+                self.account_name, self.container_name, self.object_name)
         # If version info in header, do a HEAD request for container sync and checking object versions
         if 'x-timestamp' in req.headers or \
                 (object_versions and not
@@ -1065,26 +1117,37 @@ class ObjectController(Controller):
         else:
             delete_at_container = delete_at_part = delete_at_nodes = None
 
-        #TODO connect to storage nodes
-        node_iter = GreenthreadSafeIterator(
-            self.iter_nodes_local_first(self.app.object_ring, partition))
+        #[WindChimes]connect to storage nodes or obj-server
+        if redirect_storage:
+            node_iter = GreenthreadSafeIterator(
+                self.iter_nodes_local_first(self.app.storage_ring, partition))
+        else:
+            node_iter = GreenthreadSafeIterator(
+                self.iter_nodes_local_first(self.app.object_ring, partition))
         pile = GreenPile(len(nodes))
         te = req.headers.get('transfer-encoding', '')
         chunked = ('chunked' in te)
 
         # outgoing_headers sent to Object server to do callback
-        # TODO outgoing_headers should be [object_info, [container_info]]
-        # request forwards storage nodes
-        outgoing_headers = self._backend_requests(
-            req, len(nodes), container_partition, containers,
-            delete_at_container, delete_at_part, delete_at_nodes)
+        # [WindChimes]
+        if redirect_storage:
+            outgoing_headers = self._storage_requests(
+                req, len(nodes), object_partition, objects,
+                fingerprint, seg_count, seg_order)
+            path = '/' + str(fingerprint) + '/' + str(req.headers['X-Timestamp']) + req.path_info
+        else:
+            outgoing_headers = self._backend_requests(
+                req, len(nodes), container_partition, containers,
+                delete_at_container, delete_at_part, delete_at_nodes)
+            path = req.path_info
 
+        #one Object is maped to one Container
         for nheaders in outgoing_headers:
             # RFC2616:8.2.3 disallows 100-continue without a body
             if (req.content_length > 0) or chunked:
                 nheaders['Expect'] = '100-continue'
             pile.spawn(self._connect_put_node, node_iter, partition,
-                       req.path_info, nheaders, self.app.logger.thread_locals)
+                       path, nheaders, self.app.logger.thread_locals)
 
         #start transport
         conns = [conn for conn in pile if conn]

@@ -104,6 +104,8 @@ def setup():
     con2lis = listen(('localhost', 0))
     obj1lis = listen(('localhost', 0))
     obj2lis = listen(('localhost', 0))
+    sto1lis = listen(('localhost', 0))
+    sto2lis = listen(('localhost', 0))
     _test_sockets = \
         (prolis, acc1lis, acc2lis, con1lis, con2lis, obj1lis, obj2lis)
     account_ring_path = os.path.join(_testdir, 'account.ring.gz')
@@ -134,9 +136,9 @@ def setup():
     with closing(GzipFile(storage_ring_path, 'wb')) as f:
         pickle.dump(ring.RingData([[0, 1, 0, 1], [1, 0, 1, 0]],
                     [{'id': 0, 'zone': 0, 'device': 'sda1', 'ip': '127.0.0.1',
-                      'port': obj1lis.getsockname()[1]},
+                      'port': sto1lis.getsockname()[1]},
                      {'id': 1, 'zone': 1, 'device': 'sdb1', 'ip': '127.0.0.1',
-                      'port': obj2lis.getsockname()[1]}], 30),
+                      'port': sto2lis.getsockname()[1]}], 30),
                     f)
     prosrv = proxy_server.Application(conf, FakeMemcacheReturnsNone())
     acc1srv = account_server.AccountController(conf)
@@ -667,6 +669,7 @@ class TestObjectController(unittest.TestCase):
         self.app.account_ring.set_replicas(3)
         self.app.container_ring.set_replicas(3)
         self.app.object_ring.set_replicas(3)
+        self.app.storage_ring.set_replicas(3)
 
     def assert_status_map(self, method, statuses, expected, raise_exc=False):
         with save_globals():

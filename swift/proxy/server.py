@@ -76,7 +76,11 @@ class Application(object):
             config_true_value(conf.get('allow_account_management', 'no'))
         self.object_post_as_copy = \
             config_true_value(conf.get('object_post_as_copy', 'true'))
-        self.storage_ring = storage_ring or FingerRing(swift_dir, ring_name='storage')
+        try:
+            self.storage_ring = storage_ring or FingerRing(swift_dir, ring_name='storage')
+        except IOError:
+            self.storage_ring = None
+        self.storage_redirect = self.storage_ring and config_true_value(conf.get('storage_redirect', 'no'))
         self.object_ring = object_ring or Ring(swift_dir, ring_name='object')
         self.container_ring = container_ring or Ring(swift_dir,
                                                      ring_name='container')

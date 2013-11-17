@@ -64,7 +64,7 @@ class ObjectController(object):
         /etc/swift/object-server.conf-sample.
         """
         self.logger = get_logger(conf, log_route='object-server')
-        self.app_layer = conf.get('app_layer', 'Swift-Object')
+        self.app_layer = conf.get('app_layer', 'Object')
         self.devices = conf.get('devices', '/srv/node/')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
         self.node_timeout = int(conf.get('node_timeout', 3))
