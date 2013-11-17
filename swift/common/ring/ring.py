@@ -24,6 +24,7 @@ import os
 from io import BufferedReader
 from hashlib import md5
 from itertools import chain
+from binascii import a2b_hex
 
 from swift.common.utils import hash_path, validate_configuration, json
 from swift.common.ring.utils import tiers_for_dev
@@ -379,3 +380,21 @@ class Ring(object):
                         if len(used) == self._num_devs:
                             hit_all_devs = True
                             break
+class FingerRing(Ring):
+    """
+    Partitioned consistent hashing ring.
+
+    :param serialized_path: path to serialized RingData instance
+    :param reload_time: time interval in seconds to check for a ring change
+    """
+
+    def get_part(self, fingerprint):
+        key = a2b_hex(fingerprint)
+        if time() > self._rtime:
+            self._reload()
+        part = struct.unpack_from('>I', key)[0] >> self._part_shift
+        return part
+
+    def get_nodes(self, fingerprint):
+        part = self.get_part(fingerprint)
+        return part, self._get_part_nodes(part)

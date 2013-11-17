@@ -32,7 +32,7 @@ from time import time
 
 from eventlet import Timeout
 
-from swift.common.ring import Ring
+from swift.common.ring import Ring, FingerRing
 from swift.common.utils import cache_from_env, get_logger, \
     get_remote_client, split_path, config_true_value, generate_trans_id, \
     affinity_key_function, affinity_locality_predicate
@@ -76,7 +76,7 @@ class Application(object):
             config_true_value(conf.get('allow_account_management', 'no'))
         self.object_post_as_copy = \
             config_true_value(conf.get('object_post_as_copy', 'true'))
-        self.storage_ring = storage_ring or Ring(swift_dir, ring_name='storage')
+        self.storage_ring = storage_ring or FingerRing(swift_dir, ring_name='storage')
         self.object_ring = object_ring or Ring(swift_dir, ring_name='object')
         self.container_ring = container_ring or Ring(swift_dir,
                                                      ring_name='container')
