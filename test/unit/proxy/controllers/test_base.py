@@ -433,3 +433,5 @@ class TestFuncs(unittest.TestCase):
         self.assertEquals(
             resp,
             headers_to_object_info(headers.items(), 200))
+if __name__ == "__main__":
+    unittest.main()
