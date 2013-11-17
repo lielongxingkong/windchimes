@@ -130,6 +130,14 @@ def setup():
                      {'id': 1, 'zone': 1, 'device': 'sdb1', 'ip': '127.0.0.1',
                       'port': obj2lis.getsockname()[1]}], 30),
                     f)
+    storage_ring_path = os.path.join(_testdir, 'storage.ring.gz')
+    with closing(GzipFile(storage_ring_path, 'wb')) as f:
+        pickle.dump(ring.RingData([[0, 1, 0, 1], [1, 0, 1, 0]],
+                    [{'id': 0, 'zone': 0, 'device': 'sda1', 'ip': '127.0.0.1',
+                      'port': obj1lis.getsockname()[1]},
+                     {'id': 1, 'zone': 1, 'device': 'sdb1', 'ip': '127.0.0.1',
+                      'port': obj2lis.getsockname()[1]}], 30),
+                    f)
     prosrv = proxy_server.Application(conf, FakeMemcacheReturnsNone())
     acc1srv = account_server.AccountController(conf)
     acc2srv = account_server.AccountController(conf)
@@ -238,7 +246,8 @@ class TestController(unittest.TestCase):
         app = proxy_server.Application(None, self.memcache,
                                        account_ring=self.account_ring,
                                        container_ring=self.container_ring,
-                                       object_ring=FakeRing())
+                                       object_ring=FakeRing(),
+                                       storage_ring=FakeRing())
         self.controller = swift.proxy.controllers.Controller(app)
 
         class FakeReq(object):
@@ -500,7 +509,7 @@ class TestProxyServer(unittest.TestCase):
                 raise Exception('this shouldnt be caught')
 
         app = MyApp(None, FakeMemcache(), account_ring=FakeRing(),
-                    container_ring=FakeRing(), object_ring=FakeRing())
+                    container_ring=FakeRing(), object_ring=FakeRing(), storage_ring=FakeRing())
         req = Request.blank('/account', environ={'REQUEST_METHOD': 'HEAD'})
         app.update_request(req)
         resp = app.handle_request(req)
@@ -511,6 +520,7 @@ class TestProxyServer(unittest.TestCase):
                                            FakeMemcache(),
                                            container_ring=FakeRing(),
                                            object_ring=FakeRing(),
+                                           storage_ring=FakeRing(),
                                            account_ring=FakeRing())
         resp = baseapp.handle_request(
             Request.blank('/v1/a', environ={'REQUEST_METHOD': '__init__'}))
@@ -521,6 +531,7 @@ class TestProxyServer(unittest.TestCase):
                                            FakeMemcache(),
                                            container_ring=FakeRing(),
                                            account_ring=FakeRing(),
+                                           storage_ring=FakeRing(),
                                            object_ring=FakeRing())
         resp = baseapp.handle_request(
             Request.blank('/v1/a', environ={'REQUEST_METHOD': '!invalid'}))
@@ -536,6 +547,7 @@ class TestProxyServer(unittest.TestCase):
             app = proxy_server.Application(None, FakeMemcache(),
                                            account_ring=FakeRing(),
                                            container_ring=FakeRing(),
+                                           storage_ring=FakeRing(),
                                            object_ring=FakeRing())
             req = Request.blank('/v1/a')
             req.environ['swift.authorize'] = authorize
@@ -551,6 +563,7 @@ class TestProxyServer(unittest.TestCase):
             return HTTPUnauthorized(request=req)
         app = proxy_server.Application(None, FakeMemcache(),
                                        account_ring=FakeRing(),
+                                       storage_ring=FakeRing(),
                                        container_ring=FakeRing(),
                                        object_ring=FakeRing())
         req = Request.blank('/v1/a')
@@ -565,7 +578,7 @@ class TestProxyServer(unittest.TestCase):
             baseapp = proxy_server.Application({'swift_dir': swift_dir},
                                                FakeMemcache(), FakeLogger(),
                                                FakeRing(), FakeRing(),
-                                               FakeRing())
+                                               FakeRing(), FakeRing())
             resp = baseapp.handle_request(
                 Request.blank('/', environ={'CONTENT_LENGTH': '-1'}))
             self.assertEquals(resp.status, '400 Bad Request')
@@ -585,7 +598,7 @@ class TestProxyServer(unittest.TestCase):
                                                 'invalid_host.com'},
                                                FakeMemcache(), FakeLogger(),
                                                FakeRing(), FakeRing(),
-                                               FakeRing())
+                                               FakeRing(), FakeRing())
             resp = baseapp.handle_request(
                 Request.blank('/v1/a/c/o',
                               environ={'HTTP_HOST': 'invalid_host.com'}))
@@ -597,6 +610,7 @@ class TestProxyServer(unittest.TestCase):
         baseapp = proxy_server.Application({'sorting_method': 'timing'},
                                            FakeMemcache(),
                                            container_ring=FakeRing(),
+                                           storage_ring=FakeRing(),
                                            object_ring=FakeRing(),
                                            account_ring=FakeRing())
         self.assertEquals(baseapp.node_timings, {})
@@ -626,6 +640,7 @@ class TestProxyServer(unittest.TestCase):
                                             'read_affinity': 'r1=1'},
                                            FakeMemcache(),
                                            container_ring=FakeRing(),
+                                           storage_ring=FakeRing(),
                                            object_ring=FakeRing(),
                                            account_ring=FakeRing())
 
@@ -643,6 +658,7 @@ class TestObjectController(unittest.TestCase):
     def setUp(self):
         self.app = proxy_server.Application(None, FakeMemcache(),
                                             account_ring=FakeRing(),
+                                            storage_ring=FakeRing(),
                                             container_ring=FakeRing(),
                                             object_ring=FakeRing())
         monkey_patch_mimetools()
@@ -1718,7 +1734,7 @@ class TestObjectController(unittest.TestCase):
             proxy_server.Application({'swift_dir': swift_dir},
                                      FakeMemcache(), FakeLogger(),
                                      FakeRing(), FakeRing(),
-                                     FakeRing())
+                                     FakeRing(), FakeRing())
             self.assertEquals(proxy_server.mimetypes.guess_type('blah.foo')[0],
                               'foo/bar')
             self.assertEquals(proxy_server.mimetypes.guess_type('blah.jpg')[0],
@@ -4949,6 +4965,7 @@ class TestContainerController(unittest.TestCase):
     def setUp(self):
         self.app = proxy_server.Application(None, FakeMemcache(),
                                             account_ring=FakeRing(),
+                                            storage_ring=FakeRing(),
                                             container_ring=FakeRing(),
                                             object_ring=FakeRing())
 
@@ -5845,6 +5862,7 @@ class TestAccountController(unittest.TestCase):
     def setUp(self):
         self.app = proxy_server.Application(None, FakeMemcache(),
                                             account_ring=FakeRing(),
+                                            storage_ring=FakeRing(),
                                             container_ring=FakeRing(),
                                             object_ring=FakeRing)
 
@@ -6275,6 +6293,7 @@ class TestAccountControllerFakeGetResponse(unittest.TestCase):
         conf = {'account_autocreate': 'yes'}
         self.app = proxy_server.Application(conf, FakeMemcache(),
                                             account_ring=FakeRing(),
+                                            storage_ring=FakeRing(),
                                             container_ring=FakeRing(),
                                             object_ring=FakeRing)
         self.app.memcache = FakeMemcacheReturnsNone()

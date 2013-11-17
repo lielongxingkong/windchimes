@@ -48,7 +48,7 @@ class Application(object):
     """WSGI application for the proxy server."""
 
     def __init__(self, conf, memcache=None, logger=None, account_ring=None,
-                 container_ring=None, object_ring=None):
+                 container_ring=None, object_ring=None, storage_ring=None):
         if conf is None:
             conf = {}
         if logger is None:
@@ -76,6 +76,7 @@ class Application(object):
             config_true_value(conf.get('allow_account_management', 'no'))
         self.object_post_as_copy = \
             config_true_value(conf.get('object_post_as_copy', 'true'))
+        self.storage_ring = storage_ring or Ring(swift_dir, ring_name='storage')
         self.object_ring = object_ring or Ring(swift_dir, ring_name='object')
         self.container_ring = container_ring or Ring(swift_dir,
                                                      ring_name='container')
