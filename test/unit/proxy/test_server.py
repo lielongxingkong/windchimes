@@ -40,6 +40,7 @@ from swift.proxy import server as proxy_server
 from swift.account import server as account_server
 from swift.container import server as container_server
 from swift.obj import server as object_server
+from swift.storage import server as storage_server
 from swift.common import ring
 from swift.common.exceptions import ChunkReadTimeout, SegmentError
 from swift.common.constraints import MAX_META_NAME_LENGTH, \
@@ -147,6 +148,8 @@ def setup():
     con2srv = container_server.ContainerController(conf)
     obj1srv = object_server.ObjectController(conf)
     obj2srv = object_server.ObjectController(conf)
+    sto1srv = storage_server.ObjectController(conf)
+    sto2srv = storage_server.ObjectController(conf)
     _test_servers = \
         (prosrv, acc1srv, acc2srv, con1srv, con2srv, obj1srv, obj2srv)
     nl = NullLogger()
@@ -157,8 +160,10 @@ def setup():
     con2spa = spawn(wsgi.server, con2lis, con2srv, nl)
     obj1spa = spawn(wsgi.server, obj1lis, obj1srv, nl)
     obj2spa = spawn(wsgi.server, obj2lis, obj2srv, nl)
+    sto1spa = spawn(wsgi.server, sto1lis, sto1srv, nl)
+    sto2spa = spawn(wsgi.server, sto2lis, sto2srv, nl)
     _test_coros = \
-        (prospa, acc1spa, acc2spa, con1spa, con2spa, obj1spa, obj2spa)
+        (prospa, acc1spa, acc2spa, con1spa, con2spa, obj1spa, obj2spa, sto1spa, sto2spa)
     # Create account
     ts = normalize_timestamp(time.time())
     partition, nodes = prosrv.account_ring.get_nodes('a')
@@ -1178,6 +1183,7 @@ class TestObjectController(unittest.TestCase):
                     _orig_container_listing_limit
 
     def test_GET_manifest_slo(self):
+        self.app.storage_redirect = False
         listing = [{"hash": "98568d540134639be4655198a36614a4",
                     "last_modified": "2012-11-08T04:05:37.866820",
                     "bytes": 2,
@@ -1232,6 +1238,58 @@ class TestObjectController(unittest.TestCase):
                  ['GET', '/a/c/manifest', {}],
                  ['GET', '/a/d1/seg01', {}],
                  ['GET', '/a/d2/seg02', {}]])
+
+    def test_GET_manifest_dedupe(self):
+        listing = [{"hash": "98568d540134639be4655198a36614a4",
+                    "bytes": 2,
+                    "name": 1},
+                   {"hash": "d526f1c8ef6c1e4e980e2b8471352d23",
+                    "bytes": 2,
+                    "name": 2}]
+
+        response_bodies = (
+            '',                           # HEAD /a
+            '',                           # HEAD /a/c
+            simplejson.dumps(listing),    # GET manifest
+            'Aa',                         # GET seg01
+            'Bb')                         # GET seg02
+        with save_globals():
+            controller = proxy_server.ObjectController(
+                self.app, 'a', 'c', 'manifest')
+
+            requested = []
+
+            def capture_requested_paths(ipaddr, port, device, partition,
+                                        method, path, headers=None,
+                                        query_string=None):
+                qs_dict = dict(urlparse.parse_qsl(query_string or ''))
+                requested.append([method, path, qs_dict])
+
+            set_http_connect(
+                200,    # HEAD /a
+                200,    # HEAD /a/c
+                200,    # GET listing1
+                200,    # GET seg01
+                200,    # GET seg02
+                headers=[{}, {}, {"X-Static-Large-Object": "True",
+                         'content-type': 'text/html; swift_bytes=4'}, {}, {}],
+                body_iter=response_bodies,
+                give_connect=capture_requested_paths)
+
+            req = Request.blank('/a/c/manifest')
+            resp = controller.GET(req)
+            self.assertEqual(resp.status_int, 200)
+            self.assertEqual(resp.body, 'AaBb')
+            self.assertEqual(resp.content_length, 4)
+            self.assertEqual(resp.content_type, 'text/html')
+
+            self.assertEqual(
+                requested,
+                [['HEAD', '/a', {}],
+                 ['HEAD', '/a/c', {}],
+                 ['GET', '/a/c/manifest', {}],
+                 ['GET', '/98568d540134639be4655198a36614a4', {}],
+                 ['GET', '/d526f1c8ef6c1e4e980e2b8471352d23', {}]])
 
     def test_GET_slo_multipart_manifest(self):
         listing = [{"hash": "98568d540134639be4655198a36614a4",
@@ -1334,6 +1392,7 @@ class TestObjectController(unittest.TestCase):
                  ['GET', '/a/c/manifest', {'multipart-manifest': 'get'}]])
 
     def test_GET_bad_etag_manifest_slo(self):
+        self.app.storage_redirect = False
         listing = [{"hash": "98568d540134639be4655198a36614a4",
                     "last_modified": "2012-11-08T04:05:37.866820",
                     "bytes": 2,
@@ -1390,7 +1449,61 @@ class TestObjectController(unittest.TestCase):
                  ['GET', '/a/d1/seg01', {}],
                  ['GET', '/a/d2/seg02', {}]])
 
+    def test_GET_bad_etag_manifest_dedupe(self):
+        listing = [{"hash": "98568d540134639be4655198a36614a4",
+                    "bytes": 2,
+                    "name": 1},
+                   {"hash": "invalidhash",
+                    "bytes": 2,
+                    "name": 2}]
+
+        response_bodies = (
+            '',                           # HEAD /a
+            '',                           # HEAD /a/c
+            simplejson.dumps(listing),    # GET manifest
+            'Aa',                         # GET seg01
+            'Bb')                         # GET seg02
+        with save_globals():
+            controller = proxy_server.ObjectController(
+                self.app, 'a', 'c', 'manifest')
+
+            requested = []
+
+            def capture_requested_paths(ipaddr, port, device, partition,
+                                        method, path, headers=None,
+                                        query_string=None):
+                qs_dict = dict(urlparse.parse_qsl(query_string or ''))
+                requested.append([method, path, qs_dict])
+
+            set_http_connect(
+                200,    # HEAD /a
+                200,    # HEAD /a/c
+                200,    # GET listing1
+                200,    # GET seg01
+                200,    # GET seg02
+                headers=[{}, {}, {"X-Static-Large-Object": "True",
+                         'content-type': 'text/html; swift_bytes=4'}, {}, {}],
+                body_iter=response_bodies,
+                give_connect=capture_requested_paths)
+            req = Request.blank('/a/c/manifest')
+            resp = controller.GET(req)
+            self.assertEqual(resp.status_int, 200)
+            self.assertEqual(resp.content_length, 4)  # content incomplete
+            self.assertEqual(resp.content_type, 'text/html')
+            self.assertRaises(SegmentError, lambda: resp.body)
+            # dropped connection, exception is caught by eventlet as it is
+            # iterating over response
+
+            self.assertEqual(
+                requested,
+                [['HEAD', '/a', {}],
+                 ['HEAD', '/a/c', {}],
+                 ['GET', '/a/c/manifest', {}],
+                 ['GET', '/98568d540134639be4655198a36614a4', {}],
+                 ['GET', '/invalidhash', {}]])
+
     def test_GET_nested_slo(self):
+        self.app.storage_redirect = False
         listing = [{"hash": "98568d540134639be4655198a36614a4",
                     "last_modified": "2012-11-08T04:05:37.866820",
                     "bytes": 2,
@@ -1484,6 +1597,7 @@ class TestObjectController(unittest.TestCase):
         Original whole slo is Aa1234Bb where 1234 is a sub-manifests. I'm
         pulling out 34Bb
         """
+        self.app.storage_redirect = False
         listing = [{"hash": "98568d540134639be4655198a36614a4",  # Aa
                     "last_modified": "2012-11-08T04:05:37.866820",
                     "bytes": 2,
@@ -1584,6 +1698,7 @@ class TestObjectController(unittest.TestCase):
                  ['GET', '/a/d1/seg02', {}]])
 
     def test_GET_bad_404_manifest_slo(self):
+        self.app.storage_redirect = False
         listing = [{"hash": "98568d540134639be4655198a36614a4",
                     "last_modified": "2012-11-08T04:05:37.866820",
                     "bytes": 2,
@@ -1646,6 +1761,68 @@ class TestObjectController(unittest.TestCase):
                  ['GET', '/a/d2/seg02', {}],
                  ['GET', '/a/d2/seg02', {}],
                  ['GET', '/a/d2/seg02', {}]])  # 2nd segment not found
+
+    def test_GET_bad_404_manifest_dedupe(self):
+        self.app.storage_redirect = True
+        listing = [{"hash": "98568d540134639be4655198a36614a4",
+                    "bytes": 2,
+                    "seg_count": 3,
+                    "name": 1},
+                   {"hash": "d526f1c8ef6c1e4e980e2b8471352d23",
+                    "bytes": 2,
+                    "seg_count": 3,
+                    "name": 1},
+                   {"hash": "invalidhash",
+                    "bytes": 2,
+                    "seg_count": 3,
+                    "name": 1}]
+
+        response_bodies = (
+            '',                           # HEAD /a
+            '',                           # HEAD /a/c
+            simplejson.dumps(listing),    # GET manifest
+            'Aa',                         # GET seg01
+            '')                           # GET seg02
+        with save_globals():
+            controller = proxy_server.ObjectController(
+                self.app, 'a', 'c', 'manifest')
+
+            requested = []
+
+            def capture_requested_paths(ipaddr, port, device, partition,
+                                        method, path, headers=None,
+                                        query_string=None):
+                qs_dict = dict(urlparse.parse_qsl(query_string or ''))
+                requested.append([method, path, qs_dict])
+
+            set_http_connect(
+                200,    # HEAD /a
+                200,    # HEAD /a/c
+                200,    # GET listing1
+                200,    # GET seg01
+                404,    # GET seg02
+                headers=[{}, {}, {"X-Static-Large-Object": "True",
+                         'content-type': 'text/html; swift_bytes=4'}, {}, {}],
+                body_iter=response_bodies,
+                give_connect=capture_requested_paths)
+            req = Request.blank('/a/c/manifest')
+            resp = controller.GET(req)
+            self.assertEqual(resp.status_int, 200)
+            self.assertEqual(resp.content_length, 6)  # content incomplete
+            self.assertEqual(resp.content_type, 'text/html')
+            self.assertRaises(SegmentError, lambda: resp.body)
+            # dropped connection, exception is caught by eventlet as it is
+            # iterating over response
+
+            self.assertEqual(
+                requested,
+                [['HEAD', '/a', {}],
+                 ['HEAD', '/a/c', {}],
+                 ['GET', '/a/c/manifest', {}],
+                 ['GET', '/98568d540134639be4655198a36614a4', {}],
+                 ['GET', '/d526f1c8ef6c1e4e980e2b8471352d23', {}],
+                 ['GET', '/d526f1c8ef6c1e4e980e2b8471352d23', {}],
+                 ['GET', '/d526f1c8ef6c1e4e980e2b8471352d23', {}]])  # 2nd segment not found
 
     def test_HEAD_manifest_slo(self):
         listing = [{"hash": "454dfc73af632012ce3e6217dc464241",
@@ -6392,6 +6569,8 @@ class FakeObjectController(object):
         self.rate_limit_after_segment = 3
         self.rate_limit_segments_per_sec = 2
         self.GETorHEAD_base_args = []
+        self.storage_redirect = True
+
 
     def exception(self, *args):
         self.exception_args = args
