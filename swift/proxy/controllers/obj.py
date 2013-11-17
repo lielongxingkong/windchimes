@@ -136,6 +136,7 @@ class SegmentedIterable(object):
             self.response = Response()
         self.next_get_time = 0
         self.start_time = time.time()
+        self.storage_redirect = self.controller.app.storage_redirect
 
     def _load_next_segment(self):
         """
@@ -157,10 +158,15 @@ class SegmentedIterable(object):
                     self.segment_dict['name'].lstrip('/').split('/', 1)
             else:
                 container, obj = self.container, self.segment_dict['name']
-            #TODO change partion and path to storage node's
-            partition = self.controller.app.object_ring.get_part(
-                self.controller.account_name, container, obj)
-            path = '/%s/%s/%s' % (self.controller.account_name, container, obj)
+            #[WindChimes] change partition and path to storage node's
+            if self.storage_redirect:
+                fingerprint = self.segment_dict['fingerprint']
+                partition = self.controller.app.storage_ring.get_part(fingerprint)
+                path = '/%s' % (fingerprint)
+            else:
+                partition = self.controller.app.object_ring.get_part(
+                    self.controller.account_name, container, obj)
+                path = '/%s/%s/%s' % (self.controller.account_name, container, obj)
             req = Request.blank(path)
             if self.seek or (self.length and self.length > 0):
                 bytes_available = \
@@ -180,11 +186,15 @@ class SegmentedIterable(object):
                 sleep(max(self.next_get_time - time.time(), 0))
             self.next_get_time = time.time() + \
                 1.0 / self.controller.app.rate_limit_segments_per_sec
-            #TODO fetch object from datanode
-            #change to storage server
-            resp = self.controller.GETorHEAD_base(
-                req, _('Object'), self.controller.app.object_ring, partition,
-                path)
+            #[WindChimes]
+            if self.storage_redirect:
+                resp = self.controller.GETorHEAD_base(
+                    req, _('Storage'), self.controller.app.storage_ring, partition,
+                    path)
+            else:
+                resp = self.controller.GETorHEAD_base(
+                    req, _('Object'), self.controller.app.object_ring, partition,
+                    path)
             if self.is_slo and resp.status_int == HTTP_NOT_FOUND:
                 raise SegmentError(_(
                     'Could not load object segment %(path)s:'
