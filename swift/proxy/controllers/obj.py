@@ -115,10 +115,9 @@ class SegmentedIterable(object):
     """
 
     def __init__(self, controller, container, listing, response=None,
-                 is_slo=False, max_lo_time=86400):
+                 is_slo=False, max_lo_time=86400, redirect=False):
         self.controller = controller
         self.container = container
-        self.listing = segment_listing_iter(listing)
         self.is_slo = is_slo
         self.max_lo_time = max_lo_time
         self.ratelimit_index = 0
@@ -136,7 +135,8 @@ class SegmentedIterable(object):
             self.response = Response()
         self.next_get_time = 0
         self.start_time = time.time()
-        self.storage_redirect = self.controller.app.storage_redirect
+        self.storage_redirect = (redirect and self.is_slo)
+        self.listing = iter(listing) if self.storage_redirect else segment_listing_iter(listing)
 
     def _load_next_segment(self):
         """
@@ -153,14 +153,19 @@ class SegmentedIterable(object):
             #when _load_next_segment is called, self.segment_dict will be updated
             self.segment_dict = self.segment_peek or self.listing.next()
             self.segment_peek = None
-            if self.container is None:
-                container, obj = \
-                    self.segment_dict['name'].lstrip('/').split('/', 1)
-            else:
-                container, obj = self.container, self.segment_dict['name']
+            if not self.storage_redirect:
+                if self.container is None:
+                    container, obj = \
+                        self.segment_dict['name'].lstrip('/').split('/', 1)
+                else:
+                    container, obj = self.container, self.segment_dict['name']
             #[WindChimes] change partition and path to storage node's
             if self.storage_redirect:
-                fingerprint = self.segment_dict['fingerprint']
+                try:
+                    fingerprint = self.segment_dict['hash']
+                except KeyError:
+                    raise SegmentError(_(
+                        'Mainfest has been ruined: %s') % str(self.segment_dict))
                 partition = self.controller.app.storage_ring.get_part(fingerprint)
                 path = '/%s' % (fingerprint)
             else:
@@ -659,7 +664,8 @@ class ObjectController(Controller):
                     resp.app_iter = SegmentedIterable(
                         self, lcontainer, listing, resp,
                         is_slo=(large_object == 'SLO'),
-                        max_lo_time=self.app.max_large_object_get_time)
+                        max_lo_time=self.app.max_large_object_get_time,
+                        redirect = self.app.storage_redirect)
 
             else:
                 # For objects with a reasonable number of segments, we'll serve
@@ -668,9 +674,12 @@ class ObjectController(Controller):
                 if listing:
                     try:
                         content_length = sum(o['bytes'] for o in listing)
-                        last_modified = \
-                            max(o['last_modified'] for o in listing)
-                        last_modified = datetime(*map(int, re.split('[^\d]',
+                        if self.app.storage_redirect:
+                            last_modified = resp.last_modified
+                        else:
+                            last_modified = \
+                                max(o['last_modified'] for o in listing)
+                            last_modified = datetime(*map(int, re.split('[^\d]',
                                                  last_modified)[:-1]))
                         etag = md5(
                             ''.join(o['hash'] for o in listing)).hexdigest()
@@ -687,7 +696,8 @@ class ObjectController(Controller):
                 resp.app_iter = SegmentedIterable(
                     self, lcontainer, listing, resp,
                     is_slo=(large_object == 'SLO'),
-                    max_lo_time=self.app.max_large_object_get_time)
+                    max_lo_time=self.app.max_large_object_get_time,
+                    redirect = self.app.storage_redirect)
                 resp.content_length = content_length
                 resp.last_modified = last_modified
                 resp.etag = etag
