@@ -44,11 +44,11 @@ from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPCreated, \
     HTTPClientDisconnect, HTTPMethodNotAllowed, Request, Response, UTC, \
     HTTPInsufficientStorage, HTTPForbidden, HTTPException, HeaderKeyDict, \
     HTTPConflict
-from swift.objects.diskfile import DATAFILE_SYSTEM_META, DiskFile, \
+from swift.storage.diskfile import DATAFILE_SYSTEM_META, DiskFile, \
     get_hashes
 
 
-DATADIR = 'objects'
+DATADIR = 'storage'
 ASYNCDIR = 'async_pending'
 MAX_OBJECT_NAME_LENGTH = 1024
 

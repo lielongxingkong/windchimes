@@ -35,7 +35,7 @@ from gzip import GzipFile
 from eventlet import tpool
 from test.unit import FakeLogger, mock as unit_mock
 from test.unit import _setxattr as setxattr
-from swift.objects import diskfile
+from swift.storage import diskfile
 from swift.common import utils
 from swift.common.utils import hash_path, mkdirs, normalize_timestamp
 from swift.common import ring
@@ -81,12 +81,12 @@ class TestDiskFileModuleMethods(unittest.TestCase):
         os.mkdir(self.testdir)
         os.mkdir(self.devices)
         os.mkdir(os.path.join(self.devices, 'sda'))
-        self.objects = os.path.join(self.devices, 'sda', 'objects')
-        os.mkdir(self.objects)
+        self.storage = os.path.join(self.devices, 'sda', 'storage')
+        os.mkdir(self.storage)
         self.parts = {}
         for part in ['0', '1', '2', '3']:
-            self.parts[part] = os.path.join(self.objects, part)
-            os.mkdir(os.path.join(self.objects, part))
+            self.parts[part] = os.path.join(self.storage, part)
+            os.mkdir(os.path.join(self.storage, part))
         self.ring = _create_test_ring(self.testdir)
         self.conf = dict(
             swift_dir=self.testdir, devices=self.devices, mount_check='false',
@@ -102,7 +102,7 @@ class TestDiskFileModuleMethods(unittest.TestCase):
         open(df.datadir, 'wb').close()
         ohash = '0b4c12d7e0a73840c1c4f148fda3b037'
         data_dir = ohash[-3:]
-        whole_path_from = os.path.join(self.objects, '0', data_dir)
+        whole_path_from = os.path.join(self.storage, '0', data_dir)
         orig_quarantine_renamer = diskfile.quarantine_renamer
         called = [False]
 
@@ -129,7 +129,7 @@ class TestDiskFileModuleMethods(unittest.TestCase):
         f.close()
         ohash = '0b4c12d7e0a73840c1c4f148fda3b037'
         data_dir = ohash[-3:]
-        whole_path_from = os.path.join(self.objects, '0', data_dir)
+        whole_path_from = os.path.join(self.storage, '0', data_dir)
         diskfile.hash_suffix(whole_path_from, 101)
         self.assertEquals(len(os.listdir(self.parts['0'])), 1)
 
@@ -155,7 +155,7 @@ class TestDiskFileModuleMethods(unittest.TestCase):
         f.close()
         ohash = '2b4c12d7e0a73840c1c4f148fda3b037'
         data_dir = ohash[-3:]
-        whole_path_from = os.path.join(self.objects, '0', data_dir)
+        whole_path_from = os.path.join(self.storage, '0', data_dir)
         hsh_path = os.listdir(whole_path_from)[0]
         whole_hsh_path = os.path.join(whole_path_from, hsh_path)
         diskfile.hash_suffix(whole_path_from, 99)
@@ -173,8 +173,8 @@ class TestDiskFileModuleMethods(unittest.TestCase):
         mkdirs(df.datadir)
         ohash = '4b4c12d7e0a73840c1c4f148fda3b037'
         data_dir = ohash[-3:]
-        whole_path_from = os.path.join(self.objects, '0', data_dir)
-        hashes_file = os.path.join(self.objects, '0',
+        whole_path_from = os.path.join(self.storage, '0', data_dir)
+        hashes_file = os.path.join(self.storage, '0',
                                    diskfile.HASH_FILE)
         # test that non existent file except caught
         self.assertEquals(diskfile.invalidate_hash(whole_path_from),
@@ -197,7 +197,7 @@ class TestDiskFileModuleMethods(unittest.TestCase):
                              normalize_timestamp(time()) + '.ts'),
                 'wb') as f:
             f.write('1234567890')
-        part = os.path.join(self.objects, '0')
+        part = os.path.join(self.storage, '0')
         hashed, hashes = diskfile.get_hashes(part)
         self.assertEquals(hashed, 1)
         self.assert_('037' in hashes)
@@ -212,9 +212,9 @@ class TestDiskFileModuleMethods(unittest.TestCase):
         df = diskfile.DiskFile(self.devices, 'sda', '0', '0b4c12d7e0a73840c1c4f148fda3b037'
                                , FakeLogger())
         mkdirs(df.datadir)
-        with open(os.path.join(self.objects, '0', 'bad'), 'wb') as f:
+        with open(os.path.join(self.storage, '0', 'bad'), 'wb') as f:
             f.write('1234567890')
-        part = os.path.join(self.objects, '0')
+        part = os.path.join(self.storage, '0')
         hashed, hashes = diskfile.get_hashes(part)
         self.assertEquals(hashed, 1)
         self.assert_('037' in hashes)
@@ -229,14 +229,14 @@ class TestDiskFileModuleMethods(unittest.TestCase):
                              normalize_timestamp(time()) + '.ts'),
                 'wb') as f:
             f.write('1234567890')
-        part = os.path.join(self.objects, '0')
+        part = os.path.join(self.storage, '0')
         hashed, hashes = diskfile.get_hashes(part)
         i = [0]
 
         def _getmtime(filename):
             i[0] += 1
             return 1
-        with unit_mock({'swift.objects.diskfile.getmtime': _getmtime}):
+        with unit_mock({'swift.storage.diskfile.getmtime': _getmtime}):
             hashed, hashes = diskfile.get_hashes(
                 part, recalculate=['037'])
         self.assertEquals(i[0], 2)
@@ -245,7 +245,7 @@ class TestDiskFileModuleMethods(unittest.TestCase):
         df = diskfile.DiskFile(self.devices, 'sda', '0', '0b4c12d7e0a73840c1c4f148fda3b037'
                                , FakeLogger())
         mkdirs(df.datadir)
-        part = os.path.join(self.objects, '0')
+        part = os.path.join(self.storage, '0')
         open(os.path.join(part, diskfile.HASH_FILE), 'w')
         # Now the hash file is zero bytes.
         i = [0]
@@ -253,7 +253,7 @@ class TestDiskFileModuleMethods(unittest.TestCase):
         def _getmtime(filename):
             i[0] += 1
             return 1
-        with unit_mock({'swift.objects.diskfile.getmtime': _getmtime}):
+        with unit_mock({'swift.storage.diskfile.getmtime': _getmtime}):
             hashed, hashes = diskfile.get_hashes(
                 part, recalculate=[])
         # getmtime will actually not get called.  Initially, the pickle.load
@@ -272,7 +272,7 @@ class TestDiskFileModuleMethods(unittest.TestCase):
                              normalize_timestamp(time()) + '.backmap'),
                 'wb') as f:
             f.write('1234567890')
-        part = os.path.join(self.objects, '0')
+        part = os.path.join(self.storage, '0')
         hashed, hashes = diskfile.get_hashes(part)
         i = [0]
 
@@ -280,7 +280,7 @@ class TestDiskFileModuleMethods(unittest.TestCase):
             if i[0] < 3:
                 i[0] += 1
             return i[0]
-        with unit_mock({'swift.objects.diskfile.getmtime': _getmtime}):
+        with unit_mock({'swift.storage.diskfile.getmtime': _getmtime}):
             hashed, hashes = diskfile.get_hashes(
                 part, recalculate=['037'])
         self.assertEquals(i[0], 3)
@@ -472,7 +472,7 @@ class TestDiskFile(unittest.TestCase):
         df = self._create_test_file('')  # empty
         df.quarantine()
         quar_dir = os.path.join(self.testdir, 'sda1', 'quarantined',
-                                'objects', os.path.basename(os.path.dirname(
+                                'storage', os.path.basename(os.path.dirname(
                                                             df.data_file)))
         self.assert_(os.path.isdir(quar_dir))
 
@@ -480,7 +480,7 @@ class TestDiskFile(unittest.TestCase):
         df = self._create_test_file('empty')
         new_dir = df.quarantine()
         quar_dir = os.path.join(self.testdir, 'sda1', 'quarantined',
-                                'objects', os.path.basename(os.path.dirname(
+                                'storage', os.path.basename(os.path.dirname(
                                                             df.data_file)))
         self.assert_(os.path.isdir(quar_dir))
         self.assertEquals(quar_dir, new_dir)

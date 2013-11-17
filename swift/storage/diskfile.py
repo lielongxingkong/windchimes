@@ -104,7 +104,7 @@ def quarantine_renamer(device_path, corrupted_file_path):
                      exceptions from rename
     """
     from_dir = dirname(corrupted_file_path)
-    to_dir = join(device_path, 'quarantined', 'objects', basename(from_dir))
+    to_dir = join(device_path, 'quarantined', 'storage', basename(from_dir))
     invalidate_hash(dirname(from_dir))
     try:
         renamer(from_dir, to_dir)
@@ -384,7 +384,7 @@ class DiskFile(object):
     def __init__(self, path, device, partition, fingerprint,
                  logger, disk_chunk_size=65536,
                  bytes_per_sync=(512 * 1024 * 1024),
-                 iter_hook=None, threadpool=None, obj_dir='objects',
+                 iter_hook=None, threadpool=None, obj_dir='storage',
                  mount_check=False):
         if mount_check and not check_mount(path, device):
             raise DiskFileDeviceUnavailable()

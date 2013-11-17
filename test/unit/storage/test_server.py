@@ -30,15 +30,14 @@ from hashlib import md5
 from eventlet import sleep, spawn, wsgi, listen, Timeout
 from test.unit import FakeLogger
 from test.unit import connect_tcp, readuntil2crlfs
-from swift.objects import server as object_server
-from swift.objects import diskfile
+from swift.storage import server as object_server
+from swift.storage import diskfile
 from swift.common import utils
 from swift.common.utils import hash_path, mkdirs, normalize_timestamp, \
     NullLogger, storage_directory, public, replication
 from swift.common import constraints
 from eventlet import tpool
 from swift.common.swob import Request, HeaderKeyDict
-
 
 class TestObjectController(unittest.TestCase):
     """Test swift.obj.server.ObjectController"""
@@ -390,7 +389,7 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(resp.status_int, 404)
 
         quar_dir = os.path.join(
-            self.testdir, 'sda1', 'quarantined', 'objects',
+            self.testdir, 'sda1', 'quarantined', 'storage',
             os.path.basename(os.path.dirname(objfile.data_file)))
         self.assertEquals(os.listdir(quar_dir)[0], file_name)
         self.assertEquals(os.listdir(quar_dir)[1], backref_name)
@@ -676,10 +675,10 @@ class TestObjectController(unittest.TestCase):
                 '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/uid/a/c/o',
                 environ={'REQUEST_METHOD': 'PUT'},
                 headers={'X-Timestamp': timestamp,
-                         'X-Swift-Object-Host': '1.2.3.4:0',
-                         'X-Swift-Object-Partition': '3',
-                         'X-Swift-Object-Device': 'sda1',
-                         'X-Swift-Object-Timestamp': '1',
+                         'X-Object-Host': '1.2.3.4:0',
+                         'X-Object-Partition': '3',
+                         'X-Object-Device': 'sda1',
+                         'X-Object-Timestamp': '1',
                          'Content-Type': 'application/new1',
                          'Content-Length': '0'})
             object_server.http_connect = mock_http_connect(201)
@@ -690,10 +689,10 @@ class TestObjectController(unittest.TestCase):
                 '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/uid/a/c/o',
                 environ={'REQUEST_METHOD': 'PUT'},
                 headers={'X-Timestamp': timestamp,
-                         'X-Swift-Object-Host': '1.2.3.4:0',
-                         'X-Swift-Object-Partition': '3',
-                         'X-Swift-Object-Device': 'sda1',
-                         'X-Swift-Object-Timestamp': '1',
+                         'X-Object-Host': '1.2.3.4:0',
+                         'X-Object-Partition': '3',
+                         'X-Object-Device': 'sda1',
+                         'X-Object-Timestamp': '1',
                          'Content-Type': 'application/new1',
                          'Content-Length': '0'})
             object_server.http_connect = mock_http_connect(500)
@@ -704,10 +703,10 @@ class TestObjectController(unittest.TestCase):
                 '/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/uid/a/c/o',
                 environ={'REQUEST_METHOD': 'PUT'},
                 headers={'X-Timestamp': timestamp,
-                         'X-Swift-Object-Host': '1.2.3.4:0',
-                         'X-Swift-Object-Partition': '3',
-                         'X-Swift-Object-Device': 'sda1',
-                         'X-Swift-Object-Timestamp': '1',
+                         'X-Object-Host': '1.2.3.4:0',
+                         'X-Object-Partition': '3',
+                         'X-Object-Device': 'sda1',
+                         'X-Object-Timestamp': '1',
                          'Content-Type': 'application/new1',
                          'Content-Length': '0'})
             object_server.http_connect = mock_http_connect(500, with_exc=True)
@@ -790,7 +789,7 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(resp.status_int, 404)
 
         quar_dir = os.path.join(
-            self.testdir, 'sda1', 'quarantined', 'objects',
+            self.testdir, 'sda1', 'quarantined', 'storage',
             os.path.basename(os.path.dirname(objfile.data_file)))
         self.assertEquals(os.listdir(quar_dir)[0], file_name)
 
@@ -1097,7 +1096,7 @@ class TestObjectController(unittest.TestCase):
         req = Request.blank('/sda1/p/0b4c12d7e0a73840c1c4f148fda3b037/id/a/c/o')
         resp = req.get_response(self.object_controller)
         quar_dir = os.path.join(
-            self.testdir, 'sda1', 'quarantined', 'objects',
+            self.testdir, 'sda1', 'quarantined', 'storage',
             os.path.basename(os.path.dirname(objfile.data_file)))
         self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
         body = resp.body  # actually does quarantining
@@ -1132,7 +1131,7 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(resp.status_int, 404)
 
         quar_dir = os.path.join(
-            self.testdir, 'sda1', 'quarantined', 'objects',
+            self.testdir, 'sda1', 'quarantined', 'storage',
             os.path.basename(os.path.dirname(objfile.data_file)))
         self.assertEquals(os.listdir(quar_dir)[0], file_name)
 
@@ -1161,7 +1160,7 @@ class TestObjectController(unittest.TestCase):
         req.range = 'bytes=0-4'  # partial
         resp = req.get_response(self.object_controller)
         quar_dir = os.path.join(
-            self.testdir, 'sda1', 'quarantined', 'objects',
+            self.testdir, 'sda1', 'quarantined', 'storage',
             os.path.basename(os.path.dirname(objfile.data_file)))
         resp.body
         self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
@@ -1174,7 +1173,7 @@ class TestObjectController(unittest.TestCase):
         req.range = 'bytes=1-6'  # partial
         resp = req.get_response(self.object_controller)
         quar_dir = os.path.join(
-            self.testdir, 'sda1', 'quarantined', 'objects',
+            self.testdir, 'sda1', 'quarantined', 'storage',
             os.path.basename(os.path.dirname(objfile.data_file)))
         resp.body
         self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
@@ -1184,7 +1183,7 @@ class TestObjectController(unittest.TestCase):
         req.range = 'bytes=0-14'  # full
         resp = req.get_response(self.object_controller)
         quar_dir = os.path.join(
-            self.testdir, 'sda1', 'quarantined', 'objects',
+            self.testdir, 'sda1', 'quarantined', 'storage',
             os.path.basename(os.path.dirname(objfile.data_file)))
         self.assertEquals(os.listdir(objfile.datadir)[0], file_name)
         resp.body
@@ -1723,9 +1722,9 @@ class TestObjectController(unittest.TestCase):
             headers={'X-Timestamp': '12345',
                      'Content-Type': 'application/burrito',
                      'Content-Length': '0',
-                     'X-Swift-Object-Partition': '20',
-                     'X-Swift-Object-Host': '1.2.3.4:5, 6.7.8.9:10',
-                     'X-Swift-Object-Device': 'sdb1, sdf1'})
+                     'X-Object-Partition': '20',
+                     'X-Object-Host': '1.2.3.4:5, 6.7.8.9:10',
+                     'X-Object-Device': 'sdb1, sdf1'})
 
         orig_http_connect = object_server.http_connect
         try:
@@ -1898,9 +1897,9 @@ class TestObjectController(unittest.TestCase):
             environ={'REQUEST_METHOD': 'PUT'},
             headers={'X-Timestamp': 1,
                      'X-Trans-Id': '123',
-                     'X-Swift-Object-Host': 'chost',
-                     'X-Swift-Object-Partition': 'cpartition',
-                     'X-Swift-Object-Device': 'cdevice'})
+                     'X-Object-Host': 'chost',
+                     'X-Object-Partition': 'cpartition',
+                     'X-Object-Device': 'cdevice'})
         self.object_controller.application_async_update(
             'PUT', 'a/c/o', req, {
                 'x-size': '0', 'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
