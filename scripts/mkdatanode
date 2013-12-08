@@ -1,0 +1,120 @@
+#!/bin/bash
+
+DISK=xvdb
+LOCAL_IP=172.31.23.241
+
+apt-get install -y xfsprogs
+
+umount /dev/$DISK
+mkfs.xfs -f -i size=512 /dev/$DISK
+mkdir -p /srv/node/$DISK
+mount -t xfs /dev/$DISK /srv/node/$DISK
+
+apt-get install -y rsync
+cat >/etc/rsyncd.conf <<EOF
+uid = root
+gid = root 
+log file = /var/log/rsyncd.log
+pid file = /var/run/rsyncd.pid
+address = $LOCAL_IP
+
+[account]
+max connections = 2
+path = /srv/node/
+read only = false
+lock file = /var/lock/account.lock
+
+[container]
+max connections = 2
+path = /srv/node/
+read only = false
+lock file = /var/lock/container.lock
+
+[object]
+max connections = 2
+path = /srv/node/
+read only = false
+lock file = /var/lock/object.lock
+EOF
+
+perl -pi -e 's/RSYNC_ENABLE=false/RSYNC_ENABLE=true/' /etc/default/rsync
+
+service rsync restart
+
+cat >/etc/swift/account-server.conf <<EOF
+[DEFAULT]
+mount_check = false
+bind_ip = 0.0.0.0
+workers = 2
+log_facility = LOG_LOCAL3
+recon_cache_path = /var/cache/swift
+
+[pipeline:main]
+pipeline = recon account-server
+
+[app:account-server]
+use = egg:swift#account
+
+[filter:recon]
+use = egg:swift#recon
+
+[account-replicator]
+
+[account-auditor]
+
+[account-reaper]
+EOF
+
+cat >/etc/swift/container-server.conf <<EOF
+[DEFAULT]
+mount_check = false
+bind_ip = 0.0.0.0
+workers = 2
+log_facility = LOG_LOCAL2
+recon_cache_path = /var/cache/swift
+eventlet_debug = true
+
+[pipeline:main]
+pipeline = recon container-server
+
+[app:container-server]
+use = egg:swift#container
+
+[filter:recon]
+use = egg:swift#recon
+
+[container-replicator]
+
+[container-updater]
+
+[container-auditor]
+
+[container-sync]
+EOF
+
+cat >/etc/swift/object-server.conf <<EOF
+[DEFAULT]
+mount_check = false
+bind_ip = 0.0.0.0
+workers = 2
+log_facility = LOG_LOCAL1
+disable_fallocate = true
+recon_cache_path = /var/cache/swift
+
+[pipeline:main]
+pipeline = recon object-server
+
+[filter:recon]
+use = egg:swift#recon
+
+[app:object-server]
+use = egg:swift#object
+
+[object-replicator]
+
+[object-updater]
+
+[object-auditor]
+
+[object-expirer]
+EOF
