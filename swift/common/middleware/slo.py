@@ -278,8 +278,9 @@ class StaticLargeObject(object):
             new_env['CONTENT_LENGTH'] = 0
             new_env['HTTP_USER_AGENT'] = \
                 '%s MultipartPUT' % req.environ.get('HTTP_USER_AGENT')
+	    headers = {'fingerprint':seg_dict['etag']}
             head_seg_resp = \
-                Request.blank(obj_path, new_env).get_response(self.app)
+                Request.blank(obj_path, headers=headers, environ=new_env).get_response(self.app)
             if head_seg_resp.is_success:
                 total_size += seg_size
                 if seg_size != head_seg_resp.content_length:

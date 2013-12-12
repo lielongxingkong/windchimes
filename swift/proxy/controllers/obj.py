@@ -568,11 +568,18 @@ class ObjectController(Controller):
             aresp = req.environ['swift.authorize'](req)
             if aresp:
                 return aresp
-
-        partition = self.app.object_ring.get_part(
-            self.account_name, self.container_name, self.object_name)
-        resp = self.GETorHEAD_base(
-            req, _('Object'), self.app.object_ring, partition, req.path_info)
+	if 'Fingerprint' in req.headers:
+            fingerprint = req.headers['Fingerprint']
+	    path = "/%s" % fingerprint
+            partition = self.app.storage_ring.get_part(fingerprint)
+            resp = self.GETorHEAD_base(
+                req, _('Storage'), self.app.storage_ring, partition, path)
+	    return resp
+	else:
+            partition = self.app.object_ring.get_part(
+                self.account_name, self.container_name, self.object_name)
+            resp = self.GETorHEAD_base(
+                req, _('Object'), self.app.object_ring, partition, req.path_info)
 
         if ';' in resp.headers.get('content-type', ''):
             # strip off swift_bytes from content-type
@@ -842,7 +849,7 @@ class ObjectController(Controller):
 
     def _storage_requests(self, req, n_outgoing,
                           object_partition, objects,
-                          fingerprint, seg_count, seg_order):
+                          fingerprint):
         headers = [self.generate_request_headers(req, additional=req.headers)
                    for _junk in range(n_outgoing)]
         for header in headers:
@@ -850,8 +857,6 @@ class ObjectController(Controller):
         for i, obj in enumerate(objects):
             i = i % len(headers)
             headers[i]['X-Object-Fingerprint'] = fingerprint
-            headers[i]['X-Object-SegCount'] = seg_count
-            headers[i]['X-Object-SegOrder'] = seg_order
             headers[i]['X-Object-Partition'] = object_partition
             headers[i]['X-Object-Host'] = csv_append(
                 headers[i].get('X-Object-Host'),
@@ -940,13 +945,10 @@ class ObjectController(Controller):
                                       body='Non-integer X-Delete-After')
             req.headers['x-delete-at'] = '%d' % (time.time() + x_delete_after)
         #[WindChimes] Judge redirect to storage
-        if 'fingerprint' in req.headers or 'seg_count' in req.headers or 'seg_order' in req.headers:
-            if 'fingerprint' in req.headers and 'seg_count' in req.headers \
-                    and 'seg_order' in req.headers and self.app.storage_redirect:
+        if 'fingerprint' in req.headers:
+            if 'fingerprint' in req.headers and self.app.storage_redirect:
                 redirect_storage = True
                 fingerprint = req.headers['fingerprint']
-                seg_count = req.headers['seg-count']
-                seg_order = req.headers['seg-num']
             else:
                 if self.app.storage_redirect:
                     err_body = "Server Doesn't Support Fingerprint Routing"
@@ -1143,7 +1145,7 @@ class ObjectController(Controller):
         if redirect_storage:
             outgoing_headers = self._storage_requests(
                 req, len(nodes), object_partition, objects,
-                fingerprint, seg_count, seg_order)
+                fingerprint)
             path = '/' + str(fingerprint) + '/' + str(req.headers['X-Timestamp']) + req.path_info
         else:
             outgoing_headers = self._backend_requests(
