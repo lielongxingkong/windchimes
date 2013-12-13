@@ -19,4 +19,4 @@ from swift.common.wsgi import run_wsgi
 
 if __name__ == '__main__':
     conf_file, options = parse_options()
-    run_wsgi(conf_file, 'storage-server', default_port=6000, **options)
+    run_wsgi(conf_file, 'storage-server', default_port=6003, **options)
