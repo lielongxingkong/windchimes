@@ -568,14 +568,14 @@ class ObjectController(Controller):
             aresp = req.environ['swift.authorize'](req)
             if aresp:
                 return aresp
-	if 'Fingerprint' in req.headers:
+        if 'Fingerprint' in req.headers:
             fingerprint = req.headers['Fingerprint']
-	    path = "/%s" % fingerprint
+            path = "/%s" % fingerprint
             partition = self.app.storage_ring.get_part(fingerprint)
             resp = self.GETorHEAD_base(
                 req, _('Storage'), self.app.storage_ring, partition, path)
-	    return resp
-	else:
+            return resp
+        else:
             partition = self.app.object_ring.get_part(
                 self.account_name, self.container_name, self.object_name)
             resp = self.GETorHEAD_base(
