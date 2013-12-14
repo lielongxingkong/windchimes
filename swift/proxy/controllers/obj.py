@@ -57,7 +57,7 @@ from swift.proxy.controllers.base import Controller, delay_denial, \
 from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPNotFound, \
     HTTPPreconditionFailed, HTTPRequestEntityTooLarge, HTTPRequestTimeout, \
     HTTPServerError, HTTPServiceUnavailable, Request, Response, \
-    HTTPClientDisconnect, HTTPNotImplemented, HTTPException
+    HTTPClientDisconnect, HTTPNotImplemented, HTTPException, HTTPCreated
 
 
 def segment_listing_iter(listing):
@@ -1160,6 +1160,16 @@ class ObjectController(Controller):
                 nheaders['Expect'] = '100-continue'
             pile.spawn(self._connect_put_node, node_iter, partition,
                        path, nheaders, self.app.logger.thread_locals)
+
+        #[WindChimes]
+        if redirect_storage:
+            check_req = Request.blank(req.path_info,
+                                        environ={'REQUEST_METHOD': 'HEAD'})
+            check_path = "/%s" % str(fingerprint)
+            check_resp = self.GETorHEAD_base(
+                check_req, _('Storage'), self.app.storage_ring, partition, check_path)
+            if check_resp.status_int == HTTP_OK:
+                return HTTPCreated(request=req, etag=fingerprint)]
 
         #start transport
         conns = [conn for conn in pile if conn]
