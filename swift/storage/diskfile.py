@@ -494,14 +494,13 @@ class DiskFile(object):
         check_pass = (data_file is None and meta_file is None and backmap_file is None and backref_file is None)\
                 or (backmap_file is not None and data_file is None and meta_file is None and backref_file is None)\
                 or (backmap_file is None and data_file is not None and backref_file is not None)\
+                or (backmap_file is None and data_file is not None and backref_file is None)\
                 or (data_file is not None and backmap_file is not None)
         if check_pass:
             return data_file, meta_file, backmap_file
         else:
             if data_file is None and backmap_file is None:
                 return None, None, None
-                raise DiskFileCollision("On-disk file search algorithm contract is broken: backref_file: %s, data_file:" \
-                    " %s, meta_file: %s, backmap_file: %s" % (backref_file, data_file, meta_file, backmap_file))
             raise DiskFileCollision("On-disk file search algorithm contract is broken: backref_file: %s, data_file:" \
             " %s, meta_file: %s, backmap_file: %s" % (backref_file, data_file, meta_file, backmap_file))
 

@@ -338,30 +338,12 @@ class ObjectController(object):
                         'Content-Length': str(upload_size),
                         'Finger-Print': str(disk_file.fingerprint),
                     }
-                    #Application and Extra System Metadata Should be written by POST
-                    #metadata.update(val for val in request.headers.iteritems()
-                    #    if val[0].lower().startswith('x-app-meta-')
-                    #    and len(val[0]) > 11)
-
-                    #for header_key in self.allowed_headers:
-                    #    if header_key in request.headers:
-                    #        header_caps = header_key.title()
-                    #        metadata[header_caps] = request.headers[header_key]
                     writer.put(metadata)
             except DiskFileNoSpace:
                 return HTTPInsufficientStorage(drive=device, request=request)
 
-        backref_post = {'Type': 'link', 'Backref': backref, 'Uid': uid, 'X-Timestamp': request.headers['x-timestamp']}
-        disk_file.put_metadata(backref_post, backref = True)
-        meta_for_update = {
-            'x-size': orig_metadata['Content-Length'] if file_exists else metadata['Content-Length'],
-            'x-etag': orig_metadata['ETag'] if file_exists else metadata['ETag'],
-            'x-timestamp': request.headers['x-timestamp'],
-            'x-fingerprint': fingerprint
-        }
-        self.application_async_update('PUT', backref, request,
-                HeaderKeyDict(meta_for_update), device)
-        resp = HTTPCreated(request=request, etag=meta_for_update['x-etag'])
+        xetag = orig_metadata['ETag'] if file_exists else metadata['ETag'],
+        resp = HTTPCreated(request=request, etag=xetag)
         return resp
 
     @public
